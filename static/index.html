@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HTTP/3 Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .protocol-info { background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .results { background: #e8f5e9; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffebee; padding: 15px; margin: 10px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 HTTP/3 Test Page</h1>
+    
+    <!-- <div class="protocol-info">
+        <h3>Connection Info</h3>
+        <div id="protocol-info">Loading...</div>
+    </div> -->
+
+    <button onclick="testAPI()" style="padding: 10px 20px; font-size: 16px;">Test API Endpoint</button>
+    <button onclick="multipleRequests()" style="padding: 10px 20px; font-size: 16px;">Make Multiple Requests</button>
+    
+    <div id="results"></div>
+
+    <script>
+        async function testAPI() {
+            try {
+                const start = performance.now();
+                const response = await fetch('/api/test');
+                const end = performance.now();
+                const data = await response.json();
+                
+                document.getElementById('results').innerHTML = `
+                    <div class="results">
+                        <h4>API Test Result:</h4>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                        <p><strong>Response time:</strong> ${(end - start).toFixed(2)}ms</p>
+                        <p><strong>Response headers:</strong></p>
+                        <ul>
+                            <li>Alt-Svc: ${response.headers.get('alt-svc') || 'Not present'}</li>
+                            <li>X-Server-Protocol: ${response.headers.get('x-server-protocol') || 'Not present'}</li>
+                        </ul>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('results').innerHTML = `
+                    <div class="error">
+                        <h4>Error:</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function multipleRequests() {
+            document.getElementById('results').innerHTML = '<p>Making 5 requests...</p>';
+            const results = [];
+            
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const start = performance.now();
+                    const response = await fetch(`/api/test?req=${i+1}`);
+                    const end = performance.now();
+                    const data = await response.json();
+                    results.push({
+                        request: i + 1,
+                        protocol: data.protocol,
+                        time: (end - start).toFixed(2)
+                    });
+                } catch (error) {
+                    results.push({
+                        request: i + 1,
+                        error: error.message
+                    });
+                }
+                // Small delay between requests
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            document.getElementById('results').innerHTML = `
+                <div class="results">
+                    <h4>Multiple Requests Result:</h4>
+                    <pre>${JSON.stringify(results, null, 2)}</pre>
+                </div>
+            `;
+        }
+
+        // Show connection info
+        function updateConnectionInfo() {
+            let info = '<p><strong>Browser:</strong> ' + navigator.userAgent + '</p>';
+            
+            if (navigator.connection) {
+                info += `<p><strong>Connection:</strong> ${navigator.connection.effectiveType}</p>`;
+            }
+            
+            info += `<p><strong>Current URL:</strong> ${window.location.href}</p>`;
+            info += `<p><strong>Protocol:</strong> ${window.location.protocol}</p>`;
+            
+            document.getElementById('protocol-info').innerHTML = info;
+        }
+
+        // Update info on page load
+        updateConnectionInfo();
+        
+        // Auto-test on page load
+        setTimeout(testAPI, 1000);
+    </script>
+</body>
+</html>
