@@ -1,0 +1,36 @@
+[Unit]
+Description=QUIC HTTP/3 Load Balancer for Moodle
+Documentation=https://github.com/sereyr1th/quic_
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loadbalancer
+Group=loadbalancer
+WorkingDirectory=/opt/quic-loadbalancer
+ExecStart=/opt/quic-loadbalancer/quic-server -config /etc/quic-loadbalancer/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/quic-loadbalancer/logs
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# Environment
+Environment=GOMAXPROCS=4
+
+[Install]
+WantedBy=multi-user.target

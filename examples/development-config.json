@@ -1,0 +1,65 @@
+{
+  "server": {
+    "httpPort": 8080,
+    "httpsPort": 9443,
+    "readTimeout": 10000000000,
+    "writeTimeout": 10000000000,
+    "maxIdleTime": 60000000000
+  },
+  "loadBalancer": {
+    "strategy": "round_robin",
+    "healthCheck": {
+      "enabled": true,
+      "interval": 30000000000,
+      "timeout": 5000000000,
+      "healthyThreshold": 1,
+      "unhealthyThreshold": 2,
+      "path": "/admin/cli/healthcheck.php"
+    },
+    "backendServers": [
+      {
+        "id": "moodle-dev",
+        "host": "localhost",
+        "port": 8081,
+        "weight": 1,
+        "healthy": true,
+        "lastCheck": "0001-01-01T00:00:00Z"
+      }
+    ],
+    "sessionPersistence": false,
+    "connectionMigration": true
+  },
+  "moodle": {
+    "dataRoot": "/tmp/moodledata",
+    "wwwRoot": "/var/www/moodle",
+    "sessionCookie": "MoodleSession",
+    "proxyHeaders": {
+      "X-Forwarded-For": "$remote_addr",
+      "X-Forwarded-Proto": "$scheme",
+      "X-Real-IP": "$remote_addr"
+    },
+    "phpFpmSocket": "/run/php/php8.2-fpm.sock",
+    "enableCaching": false
+  },
+  "tls": {
+    "certFile": "localhost+2.pem",
+    "keyFile": "localhost+2-key.pem",
+    "minVersion": "1.2",
+    "maxVersion": "1.3",
+    "nextProtos": [
+      "h3",
+      "h2",
+      "http/1.1"
+    ],
+    "enableH3": true,
+    "enableH2": true,
+    "enableH1": true
+  },
+  "logging": {
+    "level": "debug",
+    "format": "text",
+    "enableMetrics": true,
+    "logConnections": true,
+    "logMigrations": true
+  }
+}

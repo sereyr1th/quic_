@@ -2,21 +2,80 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
 )
 
 func main() {
+	var configFile = flag.String("config", "config.json", "Configuration file path")
+	var generateConfig = flag.Bool("generate-config", false, "Generate default configuration file and exit")
+	flag.Parse()
+
+	// Generate default config if requested
+	if *generateConfig {
+		config := DefaultConfig()
+		if err := config.Save("config.json"); err != nil {
+			log.Fatalf("Failed to generate config: %v", err)
+		}
+		fmt.Println("Default configuration saved to config.json")
+		fmt.Println("Please edit the configuration file and restart the server")
+		return
+	}
+
+	// Load configuration
+	config, err := LoadConfig(*configFile)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Validate configuration
+	if err := config.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+
+	log.Printf("Starting QUIC/HTTP3 Load Balancer for Moodle")
+	log.Printf("Configuration loaded from: %s", *configFile)
+
+	// Create load balancer
+	loadBalancer := NewLoadBalancer(&config.LoadBalancer)
+	defer loadBalancer.Close()
+
+	// Create main HTTP handler
 	mux := http.NewServeMux()
 
+	// Static files handler (for testing)
 	fs := http.FileServer(http.Dir("./static/"))
-	mux.Handle("/", fs)
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// Add a simple API endpoint to test HTTP/3
+	// Health check endpoint for the load balancer itself
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    "healthy",
+			"timestamp": time.Now(),
+			"version":   "1.0.0",
+		})
+	})
+
+	// Load balancer statistics endpoint
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		stats := loadBalancer.GetStats()
+		json.NewEncoder(w).Encode(stats)
+	})
+
+	// API test endpoint
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		protocol := r.Proto
 		if r.Proto == "HTTP/3.0" {
@@ -24,107 +83,164 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"protocol": "%s", "method": "%s", "remote_addr": "%s"}`,
-			protocol, r.Method, r.RemoteAddr)
+		response := map[string]interface{}{
+			"protocol":      protocol,
+			"method":       r.Method,
+			"remote_addr":  r.RemoteAddr,
+			"headers":      r.Header,
+			"load_balancer": "active",
+			"timestamp":    time.Now(),
+		}
+		json.NewEncoder(w).Encode(response)
 	})
 
+	// All other requests go through the load balancer
+	mux.Handle("/", loadBalancer)
+
+	// Create logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		protocol := r.Proto
 		emoji := ""
 		if r.Proto == "HTTP/3.0" {
 			protocol = "HTTP/3.0 🚀"
 			emoji = "🚀 "
 		}
-		log.Printf("%s%s %s %s (Protocol: %s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
 
 		// Set Alt-Svc header for HTTP/3 advertisement
 		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
 
-		// Add some debugging headers
+		// Add load balancer headers
+		w.Header().Set("X-Load-Balancer", "QUIC-HTTP3-LB")
 		w.Header().Set("X-Server-Protocol", r.Proto)
-		w.Header().Set("X-Alt-Svc-Sent", "h3=\":9443\"; ma=86400")
+		w.Header().Set("X-Connection-Migration", strconv.FormatBool(config.LoadBalancer.ConnectionMigration))
 
 		mux.ServeHTTP(w, r)
+
+		duration := time.Since(start)
+		log.Printf("%s%s %s %s (Protocol: %s, Duration: %v)", 
+			emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol, duration)
 	})
 
+	// Configure TLS
 	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12, // Allow TLS 1.2 for broader compatibility
+		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
-		NextProtos: []string{"h3", "h2", "http/1.1"},
-		// Add more detailed logging
+		NextProtos: config.TLS.NextProtos,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			log.Printf("TLS ClientHello: ServerName=%s, SupportedVersions=%v, NextProtos=%v",
-				hello.ServerName, hello.SupportedVersions, hello.SupportedProtos)
-			return nil, nil // Return nil to use default certificate loading
+			if config.Logging.LogConnections {
+				log.Printf("TLS ClientHello: ServerName=%s, SupportedVersions=%v, NextProtos=%v",
+					hello.ServerName, hello.SupportedVersions, hello.SupportedProtos)
+			}
+			return nil, nil // Use default certificate loading
 		},
 	}
 
-	// Start HTTP/2 server (TCP)
-	go func() {
-		tcpServer := &http.Server{
-			Addr:         ":9443",
-			Handler:      loggedMux,
-			TLSConfig:    tlsConfig,
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 10 * time.Second,
-		}
-
-		log.Println("🔄 Starting HTTP/1.1 & HTTP/2 server (TCP) on :9443")
-		if err := tcpServer.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem"); err != nil {
-			log.Printf("TCP server error: %v", err)
-		}
-	}()
-
-	// Give TCP server time to start
-	time.Sleep(1 * time.Second)
-
-	// Create HTTP/3 server (UDP)
-	h3Server := &http3.Server{
-		Addr:      ":9443",
-		Handler:   loggedMux,
-		TLSConfig: tlsConfig,
+	// Start HTTP/1.1 server for testing (if enabled)
+	if config.TLS.EnableH1 && config.Server.HTTPPort != 0 {
+		go func() {
+			httpServer := &http.Server{
+				Addr:    fmt.Sprintf(":%d", config.Server.HTTPPort),
+				Handler: loggedMux,
+			}
+			log.Printf("🌐 Starting HTTP/1.1 server on :%d", config.Server.HTTPPort)
+			if err := httpServer.ListenAndServe(); err != nil {
+				log.Printf("HTTP/1.1 server error: %v", err)
+			}
+		}()
 	}
 
-	// Add a goroutine to monitor UDP connections
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			log.Println("📡 HTTP/3 server is running and listening for UDP connections...")
-		}
-	}()
+	// Start HTTP/2 server (TCP) if enabled
+	if config.TLS.EnableH2 {
+		go func() {
+			tcpServer := &http.Server{
+				Addr:         fmt.Sprintf(":%d", config.Server.HTTPSPort),
+				Handler:      loggedMux,
+				TLSConfig:    tlsConfig,
+				ReadTimeout:  config.Server.ReadTimeout,
+				WriteTimeout: config.Server.WriteTimeout,
+			}
 
-	fmt.Println(" Starting HTTP/3 server (UDP) on https://localhost:9443")
-	fmt.Println(" Open https://localhost:9443 in your browser")
-	fmt.Println(" Test API endpoint: https://localhost:9443/api/test")
-	fmt.Println("✨ Look for the 🚀 emoji in logs to spot HTTP/3 requests!")
-	fmt.Println("🔄 Try refreshing the page multiple times to activate HTTP/3")
-	fmt.Println("")
-	// Start a simple HTTP server for comparison
-	go func() {
-		httpServer := &http.Server{
-			Addr:    ":8080",
-			Handler: loggedMux,
-		}
-		log.Println("🌐 Starting HTTP/1.1 server (no TLS) on :8080 for testing")
-		if err := httpServer.ListenAndServe(); err != nil {
-			log.Printf("HTTP server error: %v", err)
-		}
-	}()
+			log.Printf("🔄 Starting HTTP/1.1 & HTTP/2 server (TCP) on :%d", config.Server.HTTPSPort)
+			if err := tcpServer.ListenAndServeTLS(config.TLS.CertFile, config.TLS.KeyFile); err != nil {
+				log.Printf("TCP server error: %v", err)
+			}
+		}()
+	}
 
-	fmt.Println("🧪 Testing commands:")
-	fmt.Println("   curl -v --http3-only -k https://localhost:9443/api/test")
-	fmt.Println("   curl -v --http2 -k https://localhost:9443/api/test")
-	fmt.Println("   curl -v http://localhost:8080/api/test")
-	fmt.Println("")
-	fmt.Println("🔧 Troubleshooting:")
-	fmt.Println("   1. Run 'mkcert -install' to trust the CA")
-	fmt.Println("   2. Try http://localhost:8080 first (no TLS)")
-	fmt.Println("   3. Enable chrome://flags/#allow-insecure-localhost")
-	fmt.Println("")
+	// Give other servers time to start
+	time.Sleep(1 * time.Second)
 
-	log.Println("🚀 HTTP/3 server starting...")
-	err := h3Server.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem")
-	if err != nil {
-		log.Fatal("HTTP/3 server failed to start:", err)
+	// Create and start HTTP/3 server if enabled
+	if config.TLS.EnableH3 {
+		h3Server := &http3.Server{
+			Addr:      fmt.Sprintf(":%d", config.Server.HTTPSPort),
+			Handler:   loggedMux,
+			TLSConfig: tlsConfig,
+		}
+
+		// Monitor connections if logging is enabled
+		if config.Logging.LogConnections {
+			go func() {
+				for {
+					time.Sleep(30 * time.Second)
+					log.Println("📡 HTTP/3 server running, monitoring QUIC connections...")
+					stats := loadBalancer.GetStats()
+					log.Printf("📊 Load balancer stats: %d active connections, %d backends", 
+						stats["activeConnections"], len(stats["backends"].([]map[string]interface{})))
+				}
+			}()
+		}
+
+		// Setup graceful shutdown
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-c
+			log.Println("🛑 Shutting down server...")
+			loadBalancer.Close()
+			os.Exit(0)
+		}()
+
+		// Print startup information
+		fmt.Println("\n🚀 QUIC/HTTP3 Load Balancer for Moodle")
+		fmt.Println("=====================================")
+		fmt.Printf("📡 HTTP/3 server: https://localhost:%d\n", config.Server.HTTPSPort)
+		if config.Server.HTTPPort != 0 {
+			fmt.Printf("🌐 HTTP/1.1 server: http://localhost:%d\n", config.Server.HTTPPort)
+		}
+		fmt.Printf("📊 Statistics: https://localhost:%d/stats\n", config.Server.HTTPSPort)
+		fmt.Printf("🏥 Health check: https://localhost:%d/health\n", config.Server.HTTPSPort)
+		fmt.Printf("🧪 Test endpoint: https://localhost:%d/api/test\n", config.Server.HTTPSPort)
+		fmt.Println("\n🔧 Features enabled:")
+		fmt.Printf("   ✅ Connection Migration: %v\n", config.LoadBalancer.ConnectionMigration)
+		fmt.Printf("   ✅ Session Persistence: %v\n", config.LoadBalancer.SessionPersistence)
+		fmt.Printf("   ✅ Health Checks: %v\n", config.LoadBalancer.HealthCheck.Enabled)
+		fmt.Printf("   ✅ Load Balancing Strategy: %s\n", config.LoadBalancer.Strategy)
+		fmt.Printf("   ✅ Backend Servers: %d configured\n", len(config.LoadBalancer.BackendServers))
+		
+		fmt.Println("\n🧪 Testing commands:")
+		fmt.Printf("   curl -v --http3-only -k https://localhost:%d/api/test\n", config.Server.HTTPSPort)
+		fmt.Printf("   curl -v --http2 -k https://localhost:%d/api/test\n", config.Server.HTTPSPort)
+		if config.Server.HTTPPort != 0 {
+			fmt.Printf("   curl -v http://localhost:%d/api/test\n", config.Server.HTTPPort)
+		}
+		fmt.Printf("   curl -k https://localhost:%d/stats\n", config.Server.HTTPSPort)
+		
+		fmt.Println("\n📚 Moodle Integration:")
+		fmt.Println("   1. Configure your Moodle servers as backend servers in config.json")
+		fmt.Println("   2. Update Moodle's config.php with the load balancer URL")
+		fmt.Println("   3. Set up SSL certificates for your domain")
+		fmt.Println("   4. Configure health check endpoint in Moodle")
+		fmt.Println("")
+
+		log.Printf("🚀 Starting HTTP/3 server on :%d...", config.Server.HTTPSPort)
+		err := h3Server.ListenAndServeTLS(config.TLS.CertFile, config.TLS.KeyFile)
+		if err != nil {
+			log.Fatal("HTTP/3 server failed to start:", err)
+		}
+	} else {
+		log.Println("HTTP/3 is disabled in configuration")
+		select {} // Block forever
 	}
 }
