@@ -1,6 +1,28 @@
 # QUIC/HTTP3 Load Balancer for Moodle Setup Guide
 
-This guide explains how to set up QUIC/HTTP3 protocol with connection migration and load balancing for Moodle.
+This repository implements a production-ready QUIC/HTTP3 load balancer with connection migration specifically designed for Moodle Learning Management System.
+
+## 🚀 Quick Start
+
+```bash
+# 1. Build the server
+go build -o quic-server .
+
+# 2. Generate default configuration
+./quic-server --generate-config
+
+# 3. Start the load balancer
+./quic-server -config config.json
+
+# 4. Test the setup
+./test.sh
+```
+
+The load balancer will be available at:
+- **HTTPS/HTTP3**: https://localhost:9443 
+- **HTTP**: http://localhost:8080
+- **Statistics**: https://localhost:9443/stats
+- **Health Check**: https://localhost:9443/health
 
 ## Features
 

@@ -1,0 +1,54 @@
+# Binaries
+quic-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Certificate files (except examples)
+*.pem
+*.key
+*.crt
+*.p12
+!localhost+2.pem
+!localhost+2-key.pem
+
+# Configuration files (except examples)
+config.json
+!examples/*.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
