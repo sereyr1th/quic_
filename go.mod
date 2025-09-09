@@ -1,8 +1,6 @@
-module quic-website
+module quic-moodle
 
 go 1.23
-
-toolchain go1.23.0
 
 require github.com/quic-go/quic-go v0.54.0
 
