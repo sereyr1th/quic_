@@ -1,51 +1,201 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>HTTP/3 Test</title>
+    <title>HTTP/3 Connection Migration Test</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         .protocol-info { background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 5px; }
         .results { background: #e8f5e9; padding: 15px; margin: 10px 0; border-radius: 5px; }
         .error { background: #ffebee; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .migration-info { background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .button-group { margin: 20px 0; }
+        .button-group button { 
+            padding: 10px 20px; 
+            font-size: 16px; 
+            margin: 5px; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer;
+            background: #2196F3;
+            color: white;
+        }
+        .button-group button:hover { background: #1976D2; }
+        .auto-refresh { background: #4CAF50; }
+        .auto-refresh:hover { background: #45a049; }
+        .connections-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .connections-table th, .connections-table td { 
+            border: 1px solid #ddd; 
+            padding: 8px; 
+            text-align: left; 
+        }
+        .connections-table th { background-color: #f2f2f2; }
+        .migration-event { background: #fff3cd; padding: 5px; margin: 2px 0; border-radius: 3px; }
+        .status-indicator { 
+            display: inline-block; 
+            width: 10px; 
+            height: 10px; 
+            border-radius: 50%; 
+            margin-right: 5px; 
+        }
+        .status-h3 { background: #4CAF50; }
+        .status-h2 { background: #FF9800; }
+        .status-h1 { background: #F44336; }
     </style>
 </head>
 <body>
-    <h1>🚀 HTTP/3 Test Page</h1>
+    <h1>🚀 HTTP/3 Connection Migration Test</h1>
     
-    <!-- <div class="protocol-info">
-        <h3>Connection Info</h3>
+    <div class="protocol-info">
+        <h3>🔗 Connection Info</h3>
         <div id="protocol-info">Loading...</div>
-    </div> -->
+    </div>
 
-    <button onclick="testAPI()" style="padding: 10px 20px; font-size: 16px;">Test API Endpoint</button>
-    <button onclick="multipleRequests()" style="padding: 10px 20px; font-size: 16px;">Make Multiple Requests</button>
+    <div class="migration-info">
+        <h3>📱 Migration Testing Instructions</h3>
+        <ol>
+            <li><strong>Initial Setup:</strong> Make sure you're connected to WiFi</li>
+            <li><strong>Start Testing:</strong> Click "Test API" and note your connection ID</li>
+            <li><strong>Change Network:</strong> Switch to mobile hotspot or different WiFi</li>
+            <li><strong>Continue Testing:</strong> Click "Test API" again - same connection should continue!</li>
+            <li><strong>Monitor:</strong> Watch the connection table below for migration events</li>
+        </ol>
+        <p><strong>Expected Result:</strong> HTTP/3 connections should survive network changes seamlessly!</p>
+    </div>
+
+    <div class="button-group">
+        <button onclick="testAPI()">Test API Endpoint</button>
+        <button onclick="multipleRequests()">Make Multiple Requests</button>
+        <button onclick="loadConnections()">View Connections</button>
+        <button onclick="testMigration()">Test Migration Endpoint</button>
+        <button onclick="toggleAutoRefresh()" id="autoRefreshBtn" class="auto-refresh">Start Auto-Refresh</button>
+    </div>
     
     <div id="results"></div>
+    <div id="connections"></div>
 
     <script>
+        let autoRefreshInterval = null;
+        let requestCount = 0;
+        
         async function testAPI() {
             try {
+                requestCount++;
                 const start = performance.now();
-                const response = await fetch('/api/test');
+                const response = await fetch('/api/test?req=' + requestCount);
                 const end = performance.now();
                 const data = await response.json();
                 
                 document.getElementById('results').innerHTML = `
                     <div class="results">
-                        <h4>API Test Result:</h4>
+                        <h4>🧪 API Test Result #${requestCount}:</h4>
                         <pre>${JSON.stringify(data, null, 2)}</pre>
                         <p><strong>Response time:</strong> ${(end - start).toFixed(2)}ms</p>
-                        <p><strong>Response headers:</strong></p>
+                        <p><strong>Connection Headers:</strong></p>
                         <ul>
+                            <li>Connection ID: ${response.headers.get('x-connection-id') || 'Not available'}</li>
+                            <li>Remote Address: ${response.headers.get('x-remote-addr') || 'Not available'}</li>
+                            <li>Protocol: ${response.headers.get('x-protocol') || 'Not available'}</li>
                             <li>Alt-Svc: ${response.headers.get('alt-svc') || 'Not present'}</li>
-                            <li>X-Server-Protocol: ${response.headers.get('x-server-protocol') || 'Not present'}</li>
                         </ul>
                     </div>
                 `;
             } catch (error) {
                 document.getElementById('results').innerHTML = `
                     <div class="error">
-                        <h4>Error:</h4>
+                        <h4>❌ Error:</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testMigration() {
+            try {
+                const response = await fetch('/api/simulate-migration');
+                const data = await response.json();
+                
+                document.getElementById('results').innerHTML = `
+                    <div class="results">
+                        <h4>📱 Migration Test Result:</h4>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                        <p><strong>Next Step:</strong> Change your network connection and call this endpoint again!</p>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('results').innerHTML = `
+                    <div class="error">
+                        <h4>❌ Migration Test Error:</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function loadConnections() {
+            try {
+                const response = await fetch('/api/connections');
+                const data = await response.json();
+                
+                let connectionsHtml = `
+                    <div class="results">
+                        <h4>🔗 Active Connections (Total: ${data.total_count})</h4>
+                        <p><strong>Last Updated:</strong> ${new Date(data.timestamp).toLocaleString()}</p>
+                `;
+                
+                if (data.total_count === 0) {
+                    connectionsHtml += '<p>No active connections found. Make some HTTP/3 requests first!</p>';
+                } else {
+                    connectionsHtml += `
+                        <table class="connections-table">
+                            <thead>
+                                <tr>
+                                    <th>Connection ID</th>
+                                    <th>Remote Address</th>
+                                    <th>Start Time</th>
+                                    <th>Requests</th>
+                                    <th>Migrations</th>
+                                    <th>Migration Events</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    Object.values(data.connections).forEach(conn => {
+                        let migrationEvents = '';
+                        if (conn.migration_events && conn.migration_events.length > 0) {
+                            migrationEvents = conn.migration_events.map(event => 
+                                `<div class="migration-event">
+                                    ${new Date(event.timestamp).toLocaleTimeString()}: 
+                                    ${event.old_addr} → ${event.new_addr}
+                                    ${event.validated ? '✅' : '❌'}
+                                </div>`
+                            ).join('');
+                        } else {
+                            migrationEvents = '<em>No migrations</em>';
+                        }
+                        
+                        connectionsHtml += `
+                            <tr>
+                                <td><code>${conn.connection_id}</code></td>
+                                <td>${conn.remote_addr}</td>
+                                <td>${new Date(conn.start_time).toLocaleTimeString()}</td>
+                                <td>${conn.request_count}</td>
+                                <td>${conn.migration_count}</td>
+                                <td>${migrationEvents}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    connectionsHtml += '</tbody></table>';
+                }
+                
+                connectionsHtml += '</div>';
+                document.getElementById('connections').innerHTML = connectionsHtml;
+                
+            } catch (error) {
+                document.getElementById('connections').innerHTML = `
+                    <div class="error">
+                        <h4>❌ Connection Load Error:</h4>
                         <p>${error.message}</p>
                     </div>
                 `;
@@ -65,7 +215,8 @@
                     results.push({
                         request: i + 1,
                         protocol: data.protocol,
-                        time: (end - start).toFixed(2)
+                        time: (end - start).toFixed(2),
+                        connection_id: response.headers.get('x-connection-id') || 'N/A'
                     });
                 } catch (error) {
                     results.push({
@@ -79,31 +230,71 @@
             
             document.getElementById('results').innerHTML = `
                 <div class="results">
-                    <h4>Multiple Requests Result:</h4>
+                    <h4>📊 Multiple Requests Result:</h4>
                     <pre>${JSON.stringify(results, null, 2)}</pre>
                 </div>
             `;
         }
 
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('autoRefreshBtn');
+            
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                btn.textContent = 'Start Auto-Refresh';
+                btn.classList.add('auto-refresh');
+            } else {
+                autoRefreshInterval = setInterval(() => {
+                    loadConnections();
+                }, 3000); // Refresh every 3 seconds
+                btn.textContent = 'Stop Auto-Refresh';
+                btn.classList.remove('auto-refresh');
+            }
+        }
+
         // Show connection info
         function updateConnectionInfo() {
-            let info = '<p><strong>Browser:</strong> ' + navigator.userAgent + '</p>';
+            const getProtocolIcon = (protocol) => {
+                if (protocol === 'https:') return '<span class="status-indicator status-h3"></span>HTTPS (likely HTTP/3)';
+                if (protocol === 'http:') return '<span class="status-indicator status-h1"></span>HTTP';
+                return '<span class="status-indicator status-h2"></span>' + protocol;
+            };
+
+            let info = `
+                <p><strong>🌐 Browser:</strong> ${navigator.userAgent.split(' ').slice(-2).join(' ')}</p>
+                <p><strong>🔗 Protocol:</strong> ${getProtocolIcon(window.location.protocol)}</p>
+                <p><strong>📍 Current URL:</strong> ${window.location.href}</p>
+            `;
             
             if (navigator.connection) {
-                info += `<p><strong>Connection:</strong> ${navigator.connection.effectiveType}</p>`;
+                info += `<p><strong>📶 Connection:</strong> ${navigator.connection.effectiveType}</p>`;
             }
-            
-            info += `<p><strong>Current URL:</strong> ${window.location.href}</p>`;
-            info += `<p><strong>Protocol:</strong> ${window.location.protocol}</p>`;
-            
-            document.getElementById('protocol-info').innerHTML = info;
+
+            // Check if we can detect the user's IP
+            fetch('/api/test')
+                .then(response => response.json())
+                .then(data => {
+                    info += `<p><strong>🏠 Your IP:</strong> ${data.remote_addr}</p>`;
+                    info += `<p><strong>🚀 Server Protocol:</strong> ${data.protocol}</p>`;
+                    document.getElementById('protocol-info').innerHTML = info;
+                })
+                .catch(() => {
+                    document.getElementById('protocol-info').innerHTML = info;
+                });
         }
 
         // Update info on page load
         updateConnectionInfo();
         
         // Auto-test on page load
-        setTimeout(testAPI, 1000);
+        setTimeout(() => {
+            testAPI();
+            loadConnections();
+        }, 1000);
+
+        // Refresh connection info every 30 seconds
+        setInterval(updateConnectionInfo, 30000);
     </script>
 </body>
 </html>
