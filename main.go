@@ -2,66 +2,129 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
 )
 
 func main() {
-	certFile := "/etc/ssl/localcerts/localhost.crt"
-	keyFile := "/etc/ssl/localcerts/localhost.key"
+	mux := http.NewServeMux()
 
-	target, _ := url.Parse("http://127.0.0.1:8082")
-	rp := httputil.NewSingleHostReverseProxy(target)
-	originalDirector := rp.Director
-	rp.Director = func(r *http.Request) {
-		originalDirector(r)
-		// Preserve Host and set proxy headers for Moodle
-		r.Host = "localhost:9443"
-		r.Header.Set("X-Forwarded-Host", "localhost:9443")
-		r.Header.Set("X-Forwarded-Proto", "https")
-		r.Header.Set("X-Forwarded-Port", "9443")
-		// X-Forwarded-For is set by Go’s reverse proxy automatically, but we can ensure it:
-		if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			r.Header.Set("X-Forwarded-For", ip)
+	fs := http.FileServer(http.Dir("./static/"))
+	mux.Handle("/", fs)
+
+	// Add a simple API endpoint to test HTTP/3
+	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
+		protocol := r.Proto
+		if r.Proto == "HTTP/3.0" {
+			protocol = "HTTP/3.0 🚀"
 		}
-	}
 
-	// Add Alt-Svc header so browsers upgrade to HTTP/3 on next request
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
-		rp.ServeHTTP(w, r)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"protocol": "%s", "method": "%s", "remote_addr": "%s"}`,
+			protocol, r.Method, r.RemoteAddr)
 	})
 
-	// TLS config for TCP (HTTP/1.1 and HTTP/2)
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS13, // HTTP/3 requires TLS 1.3
-		NextProtos: []string{"h2", "http/1.1"},
-	}
-	srv := &http.Server{
-		Addr:         ":9443",
-		Handler:      h,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		TLSConfig:    tlsCfg,
+	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		protocol := r.Proto
+		emoji := ""
+		if r.Proto == "HTTP/3.0" {
+			protocol = "HTTP/3.0 🚀"
+			emoji = "🚀 "
+		}
+		log.Printf("%s%s %s %s (Protocol: %s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+
+		// Set Alt-Svc header for HTTP/3 advertisement
+		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
+
+		// Add some debugging headers
+		w.Header().Set("X-Server-Protocol", r.Proto)
+		w.Header().Set("X-Alt-Svc-Sent", "h3=\":9443\"; ma=86400")
+
+		mux.ServeHTTP(w, r)
+	})
+
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12, // Allow TLS 1.2 for broader compatibility
+		MaxVersion: tls.VersionTLS13,
+		NextProtos: []string{"h3", "h2", "http/1.1"},
+		// Add more detailed logging
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			log.Printf("TLS ClientHello: ServerName=%s, SupportedVersions=%v, NextProtos=%v",
+				hello.ServerName, hello.SupportedVersions, hello.SupportedProtos)
+			return nil, nil // Return nil to use default certificate loading
+		},
 	}
 
-	// Start HTTP/3 server on UDP 9443
+	// Start HTTP/2 server (TCP)
 	go func() {
-		log.Println("Starting HTTP/3 (QUIC) on :9443")
-		if err := http3.ListenAndServeTLS(":9443", certFile, keyFile, h); err != nil {
-			log.Fatalf("http3 error: %v", err)
+		tcpServer := &http.Server{
+			Addr:         ":9443",
+			Handler:      loggedMux,
+			TLSConfig:    tlsConfig,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+		}
+
+		log.Println("🔄 Starting HTTP/1.1 & HTTP/2 server (TCP) on :9443")
+		if err := tcpServer.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem"); err != nil {
+			log.Printf("TCP server error: %v", err)
 		}
 	}()
 
-	// Start TCP TLS server (HTTP/1.1 + HTTP/2) on :9443
-	log.Println("Starting HTTPS (h2/h1) on :9443")
-	if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("https error: %v", err)
+	// Give TCP server time to start
+	time.Sleep(1 * time.Second)
+
+	// Create HTTP/3 server (UDP)
+	h3Server := &http3.Server{
+		Addr:      ":9443",
+		Handler:   loggedMux,
+		TLSConfig: tlsConfig,
+	}
+
+	// Add a goroutine to monitor UDP connections
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			log.Println("📡 HTTP/3 server is running and listening for UDP connections...")
+		}
+	}()
+
+	fmt.Println(" Starting HTTP/3 server (UDP) on https://localhost:9443")
+	fmt.Println(" Open https://localhost:9443 in your browser")
+	fmt.Println(" Test API endpoint: https://localhost:9443/api/test")
+	fmt.Println("✨ Look for the 🚀 emoji in logs to spot HTTP/3 requests!")
+	fmt.Println("🔄 Try refreshing the page multiple times to activate HTTP/3")
+	fmt.Println("")
+	// Start a simple HTTP server for comparison
+	go func() {
+		httpServer := &http.Server{
+			Addr:    ":8080",
+			Handler: loggedMux,
+		}
+		log.Println("🌐 Starting HTTP/1.1 server (no TLS) on :8080 for testing")
+		if err := httpServer.ListenAndServe(); err != nil {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+
+	fmt.Println("🧪 Testing commands:")
+	fmt.Println("   curl -v --http3-only -k https://localhost:9443/api/test")
+	fmt.Println("   curl -v --http2 -k https://localhost:9443/api/test")
+	fmt.Println("   curl -v http://localhost:8080/api/test")
+	fmt.Println("")
+	fmt.Println("🔧 Troubleshooting:")
+	fmt.Println("   1. Run 'mkcert -install' to trust the CA")
+	fmt.Println("   2. Try http://localhost:8080 first (no TLS)")
+	fmt.Println("   3. Enable chrome://flags/#allow-insecure-localhost")
+	fmt.Println("")
+
+	log.Println("🚀 HTTP/3 server starting...")
+	err := h3Server.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem")
+	if err != nil {
+		log.Fatal("HTTP/3 server failed to start:", err)
 	}
 }
