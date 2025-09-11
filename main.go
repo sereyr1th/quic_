@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -44,6 +45,31 @@ var (
 		connections: make(map[string]*ConnectionInfo),
 	}
 )
+
+// getLocalIP returns the local IP address of the machine
+func getLocalIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		// Fallback method
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return "localhost"
+		}
+
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					return ipnet.IP.String()
+				}
+			}
+		}
+		return "localhost"
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
 
 // trackConnection tracks or updates connection information
 func (ct *ConnectionTracker) trackConnection(connID, remoteAddr, localAddr string) {
@@ -293,20 +319,26 @@ func main() {
 		}
 	}()
 
+	// Get current IP address and public IP
+	currentIP := getLocalIP()
+
 	fmt.Println("🚀 Starting HTTP/3 server (UDP) on https://localhost:9443")
 	fmt.Println("📱 Connection Migration Test Setup Complete!")
 	fmt.Println("")
+	fmt.Printf("🌐 Local Network IP: %s\n", currentIP)
+	fmt.Println("🌍 Public IP: 203.95.199.46 (requires port forwarding)")
+	fmt.Println("")
 	fmt.Println("🔗 Test URLs:")
 	fmt.Println("   🖥️  Desktop: https://localhost:9443")
-	fmt.Println("   📱 Mobile: https://192.168.0.180:9443")
-	fmt.Println("   🌐 HTTP fallback: http://192.168.0.180:8080")
-	fmt.Println("   API test: https://192.168.0.180:9443/api/test")
-	fmt.Println("   Connection info: https://192.168.0.180:9443/api/connections")
-	fmt.Println("   Migration test: https://192.168.0.180:9443/api/simulate-migration")
+	fmt.Printf("   📱 Mobile (WiFi): https://%s:9443\n", currentIP)
+	fmt.Printf("   🌐 HTTP fallback: http://%s:8080\n", currentIP)
+	fmt.Printf("   API test: https://%s:9443/api/test\n", currentIP)
+	fmt.Printf("   Connection info: https://%s:9443/api/connections\n", currentIP)
+	fmt.Printf("   Migration test: https://%s:9443/api/simulate-migration\n", currentIP)
 	fmt.Println("")
 	fmt.Println("📱 Mobile Testing Steps:")
 	fmt.Println("   1. Connect your phone to the same WiFi network")
-	fmt.Println("   2. Open Chrome/Safari and go to: https://192.168.0.180:9443")
+	fmt.Printf("   2. Open Chrome/Safari and go to: https://%s:9443\n", currentIP)
 	fmt.Println("   3. Accept the security warning (self-signed certificate)")
 	fmt.Println("   4. Click 'Test API Endpoint' while on WiFi")
 	fmt.Println("   5. Switch to mobile data/cellular")
@@ -314,17 +346,32 @@ func main() {
 	fmt.Println("   7. Check 'View Connections' to see migration!")
 	fmt.Println("")
 	fmt.Println("🔧 Mobile Troubleshooting:")
-	fmt.Println("   • If HTTPS doesn't work, try HTTP: http://192.168.0.180:8080")
+	fmt.Printf("   • If HTTPS doesn't work, try HTTP: http://%s:8080\n", currentIP)
 	fmt.Println("   • Accept certificate warnings in browser")
 	fmt.Println("   • Make sure phone and computer are on same WiFi")
 	fmt.Println("   • Check firewall settings if connection fails")
 	fmt.Println("")
-	fmt.Println("🧪 Migration Testing Steps:")
-	fmt.Println("   1. Open https://localhost:9443 and note your IP")
-	fmt.Println("   2. Make some requests to /api/test")
-	fmt.Println("   3. Change networks (WiFi to hotspot, different WiFi, etc.)")
-	fmt.Println("   4. Make more requests - connection should migrate seamlessly!")
-	fmt.Println("   5. Check /api/connections to see migration events")
+	fmt.Println("🧪 Connection Migration Reality Check:")
+	fmt.Println("   ⚠️  IMPORTANT: When you switch from WiFi to cellular:")
+	fmt.Printf("   📱 Your phone CANNOT reach %s from cellular network\n", currentIP)
+	fmt.Println("   🔄 Migration works when staying on the SAME network")
+	fmt.Println("   🔄 Or when using a publicly accessible server")
+	fmt.Println("")
+	fmt.Println("🧪 Real Migration Testing Options:")
+	fmt.Println("   Option 1: Test on same network with different connections")
+	fmt.Println("   • Use WiFi repeater or different WiFi bands (2.4GHz vs 5GHz)")
+	fmt.Println("   • Switch between WiFi and Ethernet on same network")
+	fmt.Println("")
+	fmt.Println("   Option 2: Set up port forwarding (Advanced)")
+	fmt.Println("   • Configure router to forward port 9443 to this computer")
+	fmt.Println("   • Then cellular can reach: https://203.95.199.46:9443")
+	fmt.Println("")
+	fmt.Println("   Option 3: Local Network Testing (RECOMMENDED)")
+	fmt.Println("   • Use the local IP address for real HTTP/3 testing")
+	fmt.Println("   • Run: ./start-local-testing.sh")
+	fmt.Printf("   • Phone URL: https://%s:9443\n", currentIP)
+	fmt.Println("   • This enables REAL HTTP/3 connection migration testing!")
+	fmt.Println("   • No tunnel limitations - direct QUIC/UDP connection")
 	fmt.Println("")
 	fmt.Println("✨ Look for the 🚀 emoji in logs to spot HTTP/3 requests!")
 	fmt.Println("🔄 Look for the 🔄 emoji to spot connection migrations!")
