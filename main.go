@@ -156,9 +156,10 @@ func QuicConnectionMiddleware(next http.Handler) http.Handler {
 			// This would be populated by a custom HTTP/3 server implementation
 		}
 
-		// For now, use a combination of remote address and protocol as connection identifier
+		// For HTTP/3, use remote address as stable connection identifier
+		// In a real QUIC implementation, we would use the actual QUIC Connection ID
 		if r.Proto == "HTTP/3.0" {
-			connID = fmt.Sprintf("h3-%s-%d", remoteAddr, time.Now().Unix()%1000)
+			connID = fmt.Sprintf("h3-%s", remoteAddr)
 			connTracker.trackConnection(connID, remoteAddr, localAddr)
 		}
 
@@ -215,14 +216,32 @@ func main() {
 	mux.HandleFunc("/api/simulate-migration", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		// This endpoint helps test migration by providing different response content
-		// that can help identify if the same connection is being used
+		// Get current connection info
+		currentConnID := w.Header().Get("X-Connection-ID")
+		currentRemoteAddr := r.RemoteAddr
+
+		// Check if we should simulate a migration
+		simulateParam := r.URL.Query().Get("simulate")
+		if simulateParam == "true" && r.Proto == "HTTP/3.0" {
+			// Manually create a migration simulation
+			// Use the same connection ID but with a simulated different address
+			simulatedNewAddr := "127.0.0.2:12345" // Simulated new address
+
+			// Track this as if it came from the new address
+			connTracker.trackConnection(currentConnID, simulatedNewAddr, r.Host)
+
+			log.Printf("🔄 Simulated migration for connection %s: %s -> %s",
+				currentConnID, currentRemoteAddr, simulatedNewAddr)
+		}
+
 		response := map[string]interface{}{
-			"message":       "Migration test endpoint",
-			"protocol":      r.Proto,
-			"timestamp":     time.Now(),
-			"connection_id": w.Header().Get("X-Connection-ID"),
-			"instructions":  "Change your network (WiFi to cellular, different WiFi) and call this endpoint again",
+			"message":            "Migration test endpoint",
+			"protocol":           r.Proto,
+			"timestamp":          time.Now(),
+			"connection_id":      currentConnID,
+			"remote_addr":        currentRemoteAddr,
+			"instructions":       "Add ?simulate=true to manually create a migration event",
+			"real_migration_tip": "For real migration: Change networks (WiFi/cellular) and call again",
 		}
 
 		json.NewEncoder(w).Encode(response)
