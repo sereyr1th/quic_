@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>HTTP/3 Connection Migration Test</title>
+    <title>HTTP/3 + Load Balancer Test</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         .protocol-info { background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 5px; }
@@ -43,7 +43,7 @@
     </style>
 </head>
 <body>
-    <h1>🚀 HTTP/3 Connection Migration Test</h1>
+    <h1>🚀 HTTP/3 + Load Balancer Test</h1>
     
     <div class="protocol-info">
         <h3>🔗 Connection Info</h3>
@@ -66,6 +66,7 @@
         <button onclick="testAPI()">Test API Endpoint</button>
         <button onclick="multipleRequests()">Make Multiple Requests</button>
         <button onclick="loadConnections()">View Connections</button>
+        <button onclick="loadBalancerStats()">Load Balancer Stats</button>
         <button onclick="testMigration()">Test Migration Endpoint</button>
         <button onclick="toggleAutoRefresh()" id="autoRefreshBtn" class="auto-refresh">Start Auto-Refresh</button>
     </div>
@@ -96,6 +97,10 @@
                             <li>Remote Address: ${response.headers.get('x-remote-addr') || 'Not available'}</li>
                             <li>Protocol: ${response.headers.get('x-protocol') || 'Not available'}</li>
                             <li>Alt-Svc: ${response.headers.get('alt-svc') || 'Not present'}</li>
+                            <li>Load Balanced: ${response.headers.get('x-load-balanced') || 'No'}</li>
+                            <li>Backend ID: ${response.headers.get('x-backend-id') || 'N/A'}</li>
+                            <li>Backend URL: ${response.headers.get('x-backend-url') || 'N/A'}</li>
+                            <li>LB Algorithm: ${response.headers.get('x-lb-algorithm') || 'N/A'}</li>
                         </ul>
                     </div>
                 `;
@@ -250,6 +255,72 @@
                 }, 3000); // Refresh every 3 seconds
                 btn.textContent = 'Stop Auto-Refresh';
                 btn.classList.remove('auto-refresh');
+            }
+        }
+
+        async function loadBalancerStats() {
+            try {
+                const response = await fetch('/api/loadbalancer');
+                const data = await response.json();
+                
+                let statsHtml = `
+                    <div class="results">
+                        <h4>🔀 Load Balancer Statistics</h4>
+                        <p><strong>Algorithm:</strong> ${data.algorithm}</p>
+                        <p><strong>Total Requests:</strong> ${data.total_requests}</p>
+                        <p><strong>Total Backends:</strong> ${data.total_backends}</p>
+                        <p><strong>Healthy Backends:</strong> ${data.healthy_backends}</p>
+                        <p><strong>Requests/Second:</strong> ${data.requests_per_second.toFixed(2)}</p>
+                        <p><strong>Last Updated:</strong> ${new Date(data.last_update).toLocaleString()}</p>
+                        
+                        <h5>📊 Backend Details:</h5>
+                        <table class="connections-table">
+                            <thead>
+                                <tr>
+                                    <th>Backend ID</th>
+                                    <th>URL</th>
+                                    <th>Status</th>
+                                    <th>Connections</th>
+                                    <th>Requests</th>
+                                    <th>Errors</th>
+                                    <th>Response Time</th>
+                                    <th>Last Check</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                
+                data.backend_stats.forEach(backend => {
+                    const status = backend.alive ? '✅ UP' : '❌ DOWN';
+                    const responseTime = backend.response_time ? `${(backend.response_time / 1000000).toFixed(2)}ms` : 'N/A';
+                    statsHtml += `
+                        <tr>
+                            <td>${backend.id}</td>
+                            <td>${backend.url}</td>
+                            <td>${status}</td>
+                            <td>${backend.connections}</td>
+                            <td>${backend.request_count}</td>
+                            <td>${backend.error_count}</td>
+                            <td>${responseTime}</td>
+                            <td>${new Date(backend.last_check).toLocaleString()}</td>
+                        </tr>
+                    `;
+                });
+                
+                statsHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                
+                document.getElementById('results').innerHTML = statsHtml;
+            } catch (error) {
+                document.getElementById('results').innerHTML = `
+                    <div class="error">
+                        <h4>❌ Load Balancer Stats Error:</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
             }
         }
 
