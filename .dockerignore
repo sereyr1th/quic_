@@ -1,0 +1,43 @@
+# Ignore files that shouldn't be in Docker context
+.git
+.gitignore
+*.md
+README.md
+MONITORING.md
+
+# Log files
+*.log
+app.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts (not needed in context, we build inside container)
+# Uncomment if you have local builds
+# main
+# *.exe
+
+# Docker files
+docker-compose.monitoring.yml
+
+# Monitoring data (will be in volumes)
+prometheus_data/
+grafana_data/
+
+# Shell scripts that are not needed in container
+start-backends.sh
+start-monitoring.sh
+status.sh
+test-metrics.sh
+start-docker.sh

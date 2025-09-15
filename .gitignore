@@ -21,6 +21,25 @@ go.work
 .idea/
 *.swp
 *.swo
+
+# Logs
+*.log
+app.log
+
+# Docker volumes data (if using local volumes)
+prometheus_data/
+grafana_data/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.idea/
+*.swp
+*.swo
 *~
 
 # OS generated files

@@ -1,0 +1,264 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "QUIC Load Balancer Overview",
+    "tags": ["quic", "loadbalancer", "http3"],
+    "style": "dark",
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Request Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(quic_requests_total[5m])",
+            "legendFormat": "{{ method }} {{ protocol }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "custom": {
+              "displayMode": "list",
+              "orientation": "horizontal"
+            },
+            "mappings": [],
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 80
+                },
+                {
+                  "color": "red",
+                  "value": 100
+                }
+              ]
+            }
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Active Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "quic_active_connections",
+            "legendFormat": "{{ protocol }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 50
+                },
+                {
+                  "color": "red",
+                  "value": 100
+                }
+              ]
+            }
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "Connection Migrations",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(quic_connection_migrations_total[5m])",
+            "legendFormat": "{{ reason }} ({{ success }})"
+          }
+        ],
+        "xAxis": {
+          "show": true
+        },
+        "yAxes": [
+          {
+            "label": "Migrations/sec",
+            "show": true
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 4,
+        "title": "Backend Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "quic_backend_healthy",
+            "legendFormat": "Backend {{ backend_id }}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [
+              {
+                "options": {
+                  "0": {
+                    "color": "red",
+                    "text": "Down"
+                  },
+                  "1": {
+                    "color": "green",
+                    "text": "Healthy"
+                  }
+                },
+                "type": "value"
+              }
+            ],
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "red",
+                  "value": 0
+                },
+                {
+                  "color": "green",
+                  "value": 1
+                }
+              ]
+            }
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 5,
+        "title": "Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(quic_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(quic_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Seconds",
+            "show": true
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        }
+      },
+      {
+        "id": 6,
+        "title": "Packet Loss Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "quic_packet_loss_rate",
+            "legendFormat": "Connection {{ connection_id }}"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Loss Rate",
+            "max": 1,
+            "min": 0,
+            "show": true
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        }
+      },
+      {
+        "id": 7,
+        "title": "Round Trip Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "quic_rtt_seconds",
+            "legendFormat": "Connection {{ connection_id }}"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Seconds",
+            "show": true
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    },
+    "refresh": "5s",
+    "schemaVersion": 16,
+    "version": 0,
+    "links": []
+  }
+}

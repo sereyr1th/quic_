@@ -1,0 +1,47 @@
+groups:
+  - name: quic_alerts
+    rules:
+      - alert: HighConnectionMigrationRate
+        expr: rate(quic_connection_migrations_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High QUIC connection migration rate"
+          description: "Connection migration rate is {{ $value }} per second"
+
+      - alert: BackendDown
+        expr: quic_backend_healthy == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend {{ $labels.backend_id }} is down"
+          description: "Backend {{ $labels.backend_id }} has been down for more than 1 minute"
+
+      - alert: HighErrorRate
+        expr: rate(quic_requests_total{status=~"5.."}[5m]) / rate(quic_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: HighPacketLoss
+        expr: quic_packet_loss_rate > 0.02
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High packet loss detected"
+          description: "Packet loss rate is {{ $value | humanizePercentage }}"
+
+      - alert: CircuitBreakerOpen
+        expr: quic_circuit_breaker_state{state="open"} == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker is open for backend {{ $labels.backend_id }}"
+          description: "Circuit breaker has been triggered for backend {{ $labels.backend_id }}"
