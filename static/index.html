@@ -1,139 +1,599 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>HTTP/3 + Load Balancer Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP/3 QUIC Load Balancer Dashboard</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .protocol-info { background: #f0f0f0; padding: 20px; margin: 20px 0; border-radius: 5px; }
-        .results { background: #e8f5e9; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        .error { background: #ffebee; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        .migration-info { background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        .button-group { margin: 20px 0; }
-        .button-group button { 
-            padding: 10px 20px; 
-            font-size: 16px; 
-            margin: 5px; 
-            border: none; 
-            border-radius: 5px; 
+        :root {
+            --primary-color: #2196F3;
+            --primary-dark: #1976D2;
+            --success-color: #4CAF50;
+            --warning-color: #FF9800;
+            --error-color: #F44336;
+            --info-color: #00BCD4;
+            --bg-color: #f5f5f5;
+            --card-bg: #ffffff;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --border-color: #e0e0e0;
+            --shadow: 0 2px 8px rgba(0,0,0,0.1);
+            --transition: all 0.3s ease;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px 0;
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+            color: white;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            transition: var(--transition);
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .card-header .icon {
+            font-size: 1.5rem;
+            margin-right: 10px;
+        }
+
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 30px;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
-            background: #2196F3;
+            transition: var(--transition);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
             color: white;
         }
-        .button-group button:hover { background: #1976D2; }
-        .auto-refresh { background: #4CAF50; }
-        .auto-refresh:hover { background: #45a049; }
-        .connections-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        .connections-table th, .connections-table td { 
-            border: 1px solid #ddd; 
-            padding: 8px; 
-            text-align: left; 
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
         }
-        .connections-table th { background-color: #f2f2f2; }
-        .migration-event { background: #fff3cd; padding: 5px; margin: 2px 0; border-radius: 3px; }
-        .status-indicator { 
-            display: inline-block; 
-            width: 10px; 
-            height: 10px; 
-            border-radius: 50%; 
-            margin-right: 5px; 
+
+        .btn-success {
+            background: var(--success-color);
+            color: white;
         }
-        .status-h3 { background: #4CAF50; }
-        .status-h2 { background: #FF9800; }
-        .status-h1 { background: #F44336; }
+
+        .btn-success:hover {
+            background: #45a049;
+        }
+
+        .btn-warning {
+            background: var(--warning-color);
+            color: white;
+        }
+
+        .btn-info {
+            background: var(--info-color);
+            color: white;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-box {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid var(--border-color);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .protocol-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .protocol-h3 {
+            background: rgba(76, 175, 80, 0.1);
+            color: var(--success-color);
+            border: 2px solid var(--success-color);
+        }
+
+        .protocol-h2 {
+            background: rgba(255, 152, 0, 0.1);
+            color: var(--warning-color);
+            border: 2px solid var(--warning-color);
+        }
+
+        .protocol-h1 {
+            background: rgba(244, 67, 54, 0.1);
+            color: var(--error-color);
+            border: 2px solid var(--error-color);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .status-up { background: var(--success-color); }
+        .status-down { background: var(--error-color); }
+
+        .table-container {
+            overflow-x: auto;
+            margin-top: 16px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--card-bg);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .data-table th {
+            background: var(--primary-color);
+            color: white;
+            padding: 12px;
+            font-weight: 600;
+            text-align: left;
+        }
+
+        .data-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table tr:hover {
+            background: rgba(33, 150, 243, 0.05);
+        }
+
+        .migration-event {
+            background: rgba(255, 193, 7, 0.1);
+            padding: 6px 10px;
+            margin: 2px 0;
+            border-radius: 4px;
+            border-left: 3px solid var(--warning-color);
+            font-size: 0.85rem;
+        }
+
+        .json-display {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            margin-top: 12px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--border-color);
+            border-radius: 50%;
+            border-top-color: var(--primary-color);
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 16px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: var(--transition);
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast-success { background: var(--success-color); }
+        .toast-error { background: var(--error-color); }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .metric-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .button-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .data-table {
+                font-size: 0.9rem;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>🚀 HTTP/3 + Load Balancer Test</h1>
-    
-    <div class="protocol-info">
-        <h3>🔗 Connection Info</h3>
-        <div id="protocol-info">Loading...</div>
-    </div>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 HTTP/3 QUIC Load Balancer</h1>
+            <p>Real-time monitoring dashboard for connection migration and load balancing</p>
+        </div>
 
-    <div class="migration-info">
-        <h3>📱 Migration Testing Instructions</h3>
-        <ol>
-            <li><strong>Initial Setup:</strong> Make sure you're connected to WiFi</li>
-            <li><strong>Start Testing:</strong> Click "Test API" and note your connection ID</li>
-            <li><strong>Change Network:</strong> Switch to mobile hotspot or different WiFi</li>
-            <li><strong>Continue Testing:</strong> Click "Test API" again - same connection should continue!</li>
-            <li><strong>Monitor:</strong> Watch the connection table below for migration events</li>
-        </ol>
-        <p><strong>Expected Result:</strong> HTTP/3 connections should survive network changes seamlessly!</p>
-    </div>
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🔗</span>
+                    Connection Info
+                </div>
+                <div id="connection-info">
+                    <div class="loading"></div> Loading...
+                </div>
+            </div>
 
-    <div class="button-group">
-        <button onclick="testAPI()">Test API Endpoint</button>
-        <button onclick="multipleRequests()">Make Multiple Requests</button>
-        <button onclick="loadConnections()">View Connections</button>
-        <button onclick="loadBalancerStats()">Load Balancer Stats</button>
-        <button onclick="testMigration()">Test Migration Endpoint</button>
-        <button onclick="toggleAutoRefresh()" id="autoRefreshBtn" class="auto-refresh">Start Auto-Refresh</button>
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">📊</span>
+                    Live Metrics
+                </div>
+                <div class="metrics-grid" id="metrics">
+                    <div class="stat-box">
+                        <div class="stat-value" id="total-requests">0</div>
+                        <div class="stat-label">Total Requests</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="active-connections">0</div>
+                        <div class="stat-label">Active Connections</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="healthy-backends">0</div>
+                        <div class="stat-label">Healthy Backends</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="migration-count">0</div>
+                        <div class="stat-label">Total Migrations</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="icon">🎮</span>
+                Testing Controls
+            </div>
+            <div class="button-grid">
+                <button class="btn btn-primary" onclick="testAPI()">
+                    🧪 Test API Endpoint
+                </button>
+                <button class="btn btn-primary" onclick="multipleRequests()">
+                    📈 Multiple Requests
+                </button>
+                <button class="btn btn-info" onclick="loadConnections()">
+                    🔗 View Connections
+                </button>
+                <button class="btn btn-info" onclick="loadBalancerStats()">
+                    ⚖️ Load Balancer Stats
+                </button>
+                <button class="btn btn-warning" onclick="testMigration()">
+                    📱 Test Migration
+                </button>
+                <button class="btn btn-success" onclick="toggleAutoRefresh()" id="autoRefreshBtn">
+                    ▶️ Start Auto-Refresh
+                </button>
+            </div>
+        </div>
+
+        <div id="results-container"></div>
+        <div id="connections-container"></div>
     </div>
-    
-    <div id="results"></div>
-    <div id="connections"></div>
 
     <script>
         let autoRefreshInterval = null;
         let requestCount = 0;
-        
-        async function testAPI() {
-            try {
-                requestCount++;
-                const start = performance.now();
-                const response = await fetch('/api/test?req=' + requestCount);
-                const end = performance.now();
-                const data = await response.json();
-                
-                document.getElementById('results').innerHTML = `
-                    <div class="results">
-                        <h4>🧪 API Test Result #${requestCount}:</h4>
-                        <pre>${JSON.stringify(data, null, 2)}</pre>
-                        <p><strong>Response time:</strong> ${(end - start).toFixed(2)}ms</p>
-                        <p><strong>Connection Headers:</strong></p>
-                        <ul>
-                            <li>Connection ID: ${response.headers.get('x-connection-id') || 'Not available'}</li>
-                            <li>Remote Address: ${response.headers.get('x-remote-addr') || 'Not available'}</li>
-                            <li>Protocol: ${response.headers.get('x-protocol') || 'Not available'}</li>
-                            <li>Alt-Svc: ${response.headers.get('alt-svc') || 'Not present'}</li>
-                            <li>Load Balanced: ${response.headers.get('x-load-balanced') || 'No'}</li>
-                            <li>Backend ID: ${response.headers.get('x-backend-id') || 'N/A'}</li>
-                            <li>Backend URL: ${response.headers.get('x-backend-url') || 'N/A'}</li>
-                            <li>LB Algorithm: ${response.headers.get('x-lb-algorithm') || 'N/A'}</li>
-                        </ul>
-                    </div>
-                `;
-            } catch (error) {
-                document.getElementById('results').innerHTML = `
-                    <div class="error">
-                        <h4>❌ Error:</h4>
-                        <p>${error.message}</p>
-                    </div>
-                `;
+        let totalMigrations = 0;
+
+        // Utility functions
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 100);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => document.body.removeChild(toast), 300);
+            }, 3000);
+        }
+
+        function formatTime(timestamp) {
+            return new Date(timestamp).toLocaleString();
+        }
+
+        function formatDuration(ms) {
+            return `${ms.toFixed(2)}ms`;
+        }
+
+        function getProtocolDisplay(protocol) {
+            if (protocol.includes('HTTP/3')) {
+                return `<span class="protocol-indicator protocol-h3">🚀 HTTP/3</span>`;
+            } else if (protocol.includes('HTTP/2')) {
+                return `<span class="protocol-indicator protocol-h2">⚡ HTTP/2</span>`;
+            } else {
+                return `<span class="protocol-indicator protocol-h1">📡 HTTP/1.1</span>`;
             }
         }
 
-        async function testMigration() {
+        // API Functions
+        async function testAPI() {
             try {
-                const response = await fetch('/api/simulate-migration');
+                requestCount++;
+                const startTime = performance.now();
+                const response = await fetch(`/api/test?req=${requestCount}`);
+                const endTime = performance.now();
                 const data = await response.json();
                 
-                document.getElementById('results').innerHTML = `
-                    <div class="results">
-                        <h4>📱 Migration Test Result:</h4>
-                        <pre>${JSON.stringify(data, null, 2)}</pre>
-                        <p><strong>Next Step:</strong> Change your network connection and call this endpoint again!</p>
+                const resultsHtml = `
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">🧪</span>
+                            API Test Result #${requestCount}
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="stat-box">
+                                <div class="stat-value">${formatDuration(endTime - startTime)}</div>
+                                <div class="stat-label">Response Time</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value">${getProtocolDisplay(data.protocol)}</div>
+                                <div class="stat-label">Protocol</div>
+                            </div>
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                        <div style="margin-top: 16px;">
+                            <strong>Response Headers:</strong>
+                            <ul style="margin-top: 8px; padding-left: 20px;">
+                                <li>Connection ID: <code>${response.headers.get('x-connection-id') || 'N/A'}</code></li>
+                                <li>Remote Address: <code>${response.headers.get('x-remote-addr') || 'N/A'}</code></li>
+                                <li>Load Balanced: ${response.headers.get('x-load-balanced') === 'true' ? '✅ Yes' : '❌ No'}</li>
+                                <li>Backend: ${response.headers.get('x-backend-url') || 'Direct'}</li>
+                            </ul>
+                        </div>
                     </div>
                 `;
+                
+                document.getElementById('results-container').innerHTML = resultsHtml;
+                showToast('API test completed successfully!');
+                updateMetrics();
+                
             } catch (error) {
-                document.getElementById('results').innerHTML = `
-                    <div class="error">
-                        <h4>❌ Migration Test Error:</h4>
-                        <p>${error.message}</p>
+                document.getElementById('results-container').innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">❌</span>
+                            API Test Error
+                        </div>
+                        <p style="color: var(--error-color); margin-top: 16px;">${error.message}</p>
                     </div>
                 `;
+                showToast('API test failed!', 'error');
             }
+        }
+
+        async function multipleRequests() {
+            document.getElementById('results-container').innerHTML = `
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">📈</span>
+                        Running Multiple Requests
+                    </div>
+                    <p><div class="loading"></div> Making 5 concurrent requests...</p>
+                </div>
+            `;
+
+            const results = [];
+            const promises = [];
+            
+            for (let i = 0; i < 5; i++) {
+                promises.push(
+                    fetch(`/api/test?req=multi-${i+1}`)
+                        .then(async response => {
+                            const data = await response.json();
+                            return {
+                                request: i + 1,
+                                protocol: data.protocol,
+                                connection_id: response.headers.get('x-connection-id'),
+                                backend: response.headers.get('x-backend-url'),
+                                success: true
+                            };
+                        })
+                        .catch(error => ({
+                            request: i + 1,
+                            error: error.message,
+                            success: false
+                        }))
+                );
+            }
+
+            const results_data = await Promise.all(promises);
+            
+            let tableHtml = `
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">📊</span>
+                        Multiple Requests Results
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Request #</th>
+                                    <th>Protocol</th>
+                                    <th>Connection ID</th>
+                                    <th>Backend</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+            `;
+            
+            results_data.forEach(result => {
+                tableHtml += `
+                    <tr>
+                        <td>${result.request}</td>
+                        <td>${result.success ? getProtocolDisplay(result.protocol) : 'N/A'}</td>
+                        <td><code>${result.connection_id || 'N/A'}</code></td>
+                        <td>${result.backend || 'N/A'}</td>
+                        <td>${result.success ? '✅ Success' : '❌ ' + result.error}</td>
+                    </tr>
+                `;
+            });
+            
+            tableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('results-container').innerHTML = tableHtml;
+            showToast('Multiple requests completed!');
+            updateMetrics();
         }
 
         async function loadConnections() {
@@ -141,28 +601,34 @@
                 const response = await fetch('/api/connections');
                 const data = await response.json();
                 
+                totalMigrations = Object.values(data.connections).reduce((sum, conn) => sum + conn.migration_count, 0);
+                
                 let connectionsHtml = `
-                    <div class="results">
-                        <h4>🔗 Active Connections (Total: ${data.total_count})</h4>
-                        <p><strong>Last Updated:</strong> ${new Date(data.timestamp).toLocaleString()}</p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">🔗</span>
+                            Active Connections (${data.total_count})
+                        </div>
+                        <p><strong>Last Updated:</strong> ${formatTime(data.timestamp)}</p>
                 `;
                 
                 if (data.total_count === 0) {
-                    connectionsHtml += '<p>No active connections found. Make some HTTP/3 requests first!</p>';
+                    connectionsHtml += '<p style="margin-top: 16px; color: var(--text-secondary);">No active connections. Make some HTTP/3 requests first!</p>';
                 } else {
                     connectionsHtml += `
-                        <table class="connections-table">
-                            <thead>
-                                <tr>
-                                    <th>Connection ID</th>
-                                    <th>Remote Address</th>
-                                    <th>Start Time</th>
-                                    <th>Requests</th>
-                                    <th>Migrations</th>
-                                    <th>Migration Events</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Connection ID</th>
+                                        <th>Remote Address</th>
+                                        <th>Start Time</th>
+                                        <th>Requests</th>
+                                        <th>Migrations</th>
+                                        <th>Migration Events</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
                     `;
                     
                     Object.values(data.connections).forEach(conn => {
@@ -170,91 +636,45 @@
                         if (conn.migration_events && conn.migration_events.length > 0) {
                             migrationEvents = conn.migration_events.map(event => 
                                 `<div class="migration-event">
-                                    ${new Date(event.timestamp).toLocaleTimeString()}: 
+                                    ${formatTime(event.timestamp)}: 
                                     ${event.old_addr} → ${event.new_addr}
                                     ${event.validated ? '✅' : '❌'}
                                 </div>`
                             ).join('');
                         } else {
-                            migrationEvents = '<em>No migrations</em>';
+                            migrationEvents = '<em style="color: var(--text-secondary);">No migrations</em>';
                         }
                         
                         connectionsHtml += `
                             <tr>
                                 <td><code>${conn.connection_id}</code></td>
                                 <td>${conn.remote_addr}</td>
-                                <td>${new Date(conn.start_time).toLocaleTimeString()}</td>
+                                <td>${formatTime(conn.start_time)}</td>
                                 <td>${conn.request_count}</td>
-                                <td>${conn.migration_count}</td>
+                                <td>${conn.migration_count || 0}</td>
                                 <td>${migrationEvents}</td>
                             </tr>
                         `;
                     });
                     
-                    connectionsHtml += '</tbody></table>';
+                    connectionsHtml += '</tbody></table></div>';
                 }
                 
                 connectionsHtml += '</div>';
-                document.getElementById('connections').innerHTML = connectionsHtml;
+                document.getElementById('connections-container').innerHTML = connectionsHtml;
+                updateMetrics();
                 
             } catch (error) {
-                document.getElementById('connections').innerHTML = `
-                    <div class="error">
-                        <h4>❌ Connection Load Error:</h4>
-                        <p>${error.message}</p>
+                document.getElementById('connections-container').innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">❌</span>
+                            Connection Load Error
+                        </div>
+                        <p style="color: var(--error-color); margin-top: 16px;">${error.message}</p>
                     </div>
                 `;
-            }
-        }
-
-        async function multipleRequests() {
-            document.getElementById('results').innerHTML = '<p>Making 5 requests...</p>';
-            const results = [];
-            
-            for (let i = 0; i < 5; i++) {
-                try {
-                    const start = performance.now();
-                    const response = await fetch(`/api/test?req=${i+1}`);
-                    const end = performance.now();
-                    const data = await response.json();
-                    results.push({
-                        request: i + 1,
-                        protocol: data.protocol,
-                        time: (end - start).toFixed(2),
-                        connection_id: response.headers.get('x-connection-id') || 'N/A'
-                    });
-                } catch (error) {
-                    results.push({
-                        request: i + 1,
-                        error: error.message
-                    });
-                }
-                // Small delay between requests
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            
-            document.getElementById('results').innerHTML = `
-                <div class="results">
-                    <h4>📊 Multiple Requests Result:</h4>
-                    <pre>${JSON.stringify(results, null, 2)}</pre>
-                </div>
-            `;
-        }
-
-        function toggleAutoRefresh() {
-            const btn = document.getElementById('autoRefreshBtn');
-            
-            if (autoRefreshInterval) {
-                clearInterval(autoRefreshInterval);
-                autoRefreshInterval = null;
-                btn.textContent = 'Start Auto-Refresh';
-                btn.classList.add('auto-refresh');
-            } else {
-                autoRefreshInterval = setInterval(() => {
-                    loadConnections();
-                }, 3000); // Refresh every 3 seconds
-                btn.textContent = 'Stop Auto-Refresh';
-                btn.classList.remove('auto-refresh');
+                showToast('Failed to load connections!', 'error');
             }
         }
 
@@ -264,35 +684,51 @@
                 const data = await response.json();
                 
                 let statsHtml = `
-                    <div class="results">
-                        <h4>🔀 Load Balancer Statistics</h4>
-                        <p><strong>Algorithm:</strong> ${data.algorithm}</p>
-                        <p><strong>Total Requests:</strong> ${data.total_requests}</p>
-                        <p><strong>Total Backends:</strong> ${data.total_backends}</p>
-                        <p><strong>Healthy Backends:</strong> ${data.healthy_backends}</p>
-                        <p><strong>Requests/Second:</strong> ${data.requests_per_second.toFixed(2)}</p>
-                        <p><strong>Last Updated:</strong> ${new Date(data.last_update).toLocaleString()}</p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">⚖️</span>
+                            Load Balancer Statistics
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-value">${data.algorithm}</div>
+                                <div class="metric-label">Algorithm</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value">${data.total_requests}</div>
+                                <div class="metric-label">Total Requests</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value">${data.healthy_backends}/${data.total_backends}</div>
+                                <div class="metric-label">Healthy Backends</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value">${data.requests_per_second.toFixed(1)}</div>
+                                <div class="metric-label">Req/Second</div>
+                            </div>
+                        </div>
                         
-                        <h5>📊 Backend Details:</h5>
-                        <table class="connections-table">
-                            <thead>
-                                <tr>
-                                    <th>Backend ID</th>
-                                    <th>URL</th>
-                                    <th>Status</th>
-                                    <th>Connections</th>
-                                    <th>Requests</th>
-                                    <th>Errors</th>
-                                    <th>Response Time</th>
-                                    <th>Last Check</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Backend ID</th>
+                                        <th>URL</th>
+                                        <th>Status</th>
+                                        <th>Connections</th>
+                                        <th>Requests</th>
+                                        <th>Errors</th>
+                                        <th>Last Check</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
                 `;
                 
                 data.backend_stats.forEach(backend => {
-                    const status = backend.alive ? '✅ UP' : '❌ DOWN';
-                    const responseTime = backend.response_time ? `${(backend.response_time / 1000000).toFixed(2)}ms` : 'N/A';
+                    const status = backend.alive ? 
+                        '<span class="status-indicator status-up"></span>UP' : 
+                        '<span class="status-indicator status-down"></span>DOWN';
+                    
                     statsHtml += `
                         <tr>
                             <td>${backend.id}</td>
@@ -301,71 +737,134 @@
                             <td>${backend.connections}</td>
                             <td>${backend.request_count}</td>
                             <td>${backend.error_count}</td>
-                            <td>${responseTime}</td>
-                            <td>${new Date(backend.last_check).toLocaleString()}</td>
+                            <td>${formatTime(backend.last_check)}</td>
                         </tr>
                     `;
                 });
                 
                 statsHtml += `
-                            </tbody>
-                        </table>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 `;
                 
-                document.getElementById('results').innerHTML = statsHtml;
+                document.getElementById('results-container').innerHTML = statsHtml;
+                updateMetrics();
+                
             } catch (error) {
-                document.getElementById('results').innerHTML = `
-                    <div class="error">
-                        <h4>❌ Load Balancer Stats Error:</h4>
-                        <p>${error.message}</p>
+                showToast('Failed to load load balancer stats!', 'error');
+            }
+        }
+
+        async function testMigration() {
+            try {
+                const response = await fetch('/api/simulate-migration?simulate=true');
+                const data = await response.json();
+                
+                document.getElementById('results-container').innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="icon">📱</span>
+                            Migration Test Result
+                        </div>
+                        <div class="json-display">${JSON.stringify(data, null, 2)}</div>
+                        <p style="margin-top: 16px; color: var(--info-color);">
+                            <strong>Next Step:</strong> Change your network connection and test again to see real migration!
+                        </p>
                     </div>
+                `;
+                
+                showToast('Migration test completed!');
+                setTimeout(loadConnections, 1000); // Refresh connections after migration test
+                
+            } catch (error) {
+                showToast('Migration test failed!', 'error');
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('autoRefreshBtn');
+            
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                btn.innerHTML = '▶️ Start Auto-Refresh';
+                btn.className = 'btn btn-success';
+                showToast('Auto-refresh stopped');
+            } else {
+                autoRefreshInterval = setInterval(() => {
+                    loadConnections();
+                    updateMetrics();
+                }, 3000);
+                btn.innerHTML = '⏸️ Stop Auto-Refresh';
+                btn.className = 'btn btn-warning';
+                showToast('Auto-refresh started (3s interval)');
+            }
+        }
+
+        async function updateConnectionInfo() {
+            try {
+                const response = await fetch('/api/test');
+                const data = await response.json();
+                
+                const protocolDisplay = getProtocolDisplay(data.protocol);
+                
+                document.getElementById('connection-info').innerHTML = `
+                    <div style="margin-bottom: 16px;">
+                        <strong>🌐 Protocol:</strong> ${protocolDisplay}
+                    </div>
+                    <div style="margin-bottom: 16px;">
+                        <strong>🏠 Your IP:</strong> <code>${data.remote_addr}</code>
+                    </div>
+                    <div style="margin-bottom: 16px;">
+                        <strong>🔗 Connection:</strong> <code>${data.connection_id || 'N/A'}</code>
+                    </div>
+                    <div>
+                        <strong>📍 URL:</strong> <code>${window.location.href}</code>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('connection-info').innerHTML = `
+                    <p style="color: var(--error-color);">Failed to load connection info</p>
                 `;
             }
         }
 
-        // Show connection info
-        function updateConnectionInfo() {
-            const getProtocolIcon = (protocol) => {
-                if (protocol === 'https:') return '<span class="status-indicator status-h3"></span>HTTPS (likely HTTP/3)';
-                if (protocol === 'http:') return '<span class="status-indicator status-h1"></span>HTTP';
-                return '<span class="status-indicator status-h2"></span>' + protocol;
-            };
-
-            let info = `
-                <p><strong>🌐 Browser:</strong> ${navigator.userAgent.split(' ').slice(-2).join(' ')}</p>
-                <p><strong>🔗 Protocol:</strong> ${getProtocolIcon(window.location.protocol)}</p>
-                <p><strong>📍 Current URL:</strong> ${window.location.href}</p>
-            `;
-            
-            if (navigator.connection) {
-                info += `<p><strong>📶 Connection:</strong> ${navigator.connection.effectiveType}</p>`;
+        async function updateMetrics() {
+            try {
+                const [connectionsRes, balancerRes] = await Promise.all([
+                    fetch('/api/connections'),
+                    fetch('/api/loadbalancer')
+                ]);
+                
+                const connectionsData = await connectionsRes.json();
+                const balancerData = await balancerRes.json();
+                
+                document.getElementById('total-requests').textContent = balancerData.total_requests;
+                document.getElementById('active-connections').textContent = connectionsData.total_count;
+                document.getElementById('healthy-backends').textContent = `${balancerData.healthy_backends}/${balancerData.total_backends}`;
+                document.getElementById('migration-count').textContent = totalMigrations;
+                
+            } catch (error) {
+                console.error('Failed to update metrics:', error);
             }
-
-            // Check if we can detect the user's IP
-            fetch('/api/test')
-                .then(response => response.json())
-                .then(data => {
-                    info += `<p><strong>🏠 Your IP:</strong> ${data.remote_addr}</p>`;
-                    info += `<p><strong>🚀 Server Protocol:</strong> ${data.protocol}</p>`;
-                    document.getElementById('protocol-info').innerHTML = info;
-                })
-                .catch(() => {
-                    document.getElementById('protocol-info').innerHTML = info;
-                });
         }
 
-        // Update info on page load
-        updateConnectionInfo();
-        
-        // Auto-test on page load
-        setTimeout(() => {
-            testAPI();
-            loadConnections();
-        }, 1000);
-
-        // Refresh connection info every 30 seconds
-        setInterval(updateConnectionInfo, 30000);
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', () => {
+            updateConnectionInfo();
+            updateMetrics();
+            
+            // Auto-test on page load
+            setTimeout(() => {
+                testAPI();
+                loadConnections();
+            }, 1000);
+            
+            // Refresh connection info periodically
+            setInterval(updateConnectionInfo, 30000);
+        });
     </script>
 </body>
 </html>
