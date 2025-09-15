@@ -318,8 +318,11 @@ func (lb *LoadBalancer) GetStats() *LoadBalancingStats {
 
 // Health check function
 func healthCheck() {
-	t := time.NewTicker(time.Second * 10)
+	t := time.NewTicker(time.Second * 30)
 	defer t.Stop()
+
+	// Track previous status to only log changes
+	previousStatus := make(map[int]bool)
 
 	for {
 		select {
@@ -340,13 +343,15 @@ func healthCheck() {
 
 				backend.SetAlive(isAlive)
 
-				status := "❌ DOWN"
-				if isAlive {
-					status = "✅ UP"
+				// Only log status changes
+				if prevStatus, exists := previousStatus[backend.ID]; !exists || prevStatus != isAlive {
+					status := "❌ DOWN"
+					if isAlive {
+						status = "✅ UP"
+					}
+					log.Printf("🏥 Backend #%d %s %s", backend.ID, backend.URL, status)
+					previousStatus[backend.ID] = isAlive
 				}
-				log.Printf("🏥 Health Check: Backend #%d %s %s (Connections: %d, Requests: %d, Errors: %d, Response: %v)",
-					backend.ID, backend.URL, status, backend.GetConnections(),
-					backend.GetRequestCount(), backend.GetErrorCount(), responseTime)
 			}
 		}
 	}
@@ -601,7 +606,12 @@ func main() {
 			protocol = "HTTP/3.0 🚀"
 			emoji = "🚀 "
 		}
-		log.Printf("%s%s %s %s (Protocol: %s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+
+		// Only log non-static requests and important endpoints to reduce noise
+		if !strings.HasPrefix(r.URL.Path, "/static/") &&
+			!strings.HasPrefix(r.URL.Path, "/favicon.ico") {
+			log.Printf("%s%s %s %s (%s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+		}
 
 		// Set Alt-Svc header for HTTP/3 advertisement
 		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
@@ -674,96 +684,16 @@ func main() {
 		QUICConfig: quicConfig,
 	}
 
-	// Add a goroutine to monitor UDP connections
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			log.Println("📡 HTTP/3 server is running and listening for UDP connections...")
-		}
-	}()
+	// Removed verbose UDP connection monitoring
 
 	// Get current IP address and public IP
 	currentIP := getLocalIP()
 
-	fmt.Println("🚀 Starting HTTP/3 + Load Balancer server on https://localhost:9443")
-	fmt.Println("� Load Balancing Setup Complete!")
-	fmt.Println("")
-	fmt.Printf("🌐 Local Network IP: %s\n", currentIP)
-	fmt.Println("")
-	fmt.Println("🔗 Test URLs:")
-	fmt.Println("   🖥️  Main: https://localhost:9443")
-	fmt.Printf("   📱 Mobile: https://%s:9443\n", currentIP)
-	fmt.Printf("   📊 Load Balancer Stats: https://%s:9443/api/loadbalancer\n", currentIP)
-	fmt.Printf("   🔄 Connections: https://%s:9443/api/connections\n", currentIP)
-	fmt.Printf("   🧪 Test API: https://%s:9443/api/test\n", currentIP)
-	fmt.Println("")
-	fmt.Println("🏪 Backend Configuration:")
-	for i, backend := range backends {
-		fmt.Printf("   Backend #%d: %s\n", i, backend)
-	}
-	fmt.Println("")
-	fmt.Println("⚠️  IMPORTANT: Start your backend servers first!")
-	fmt.Println("   Example backend servers:")
-	fmt.Println("   python3 -m http.server 8081")
-	fmt.Println("   python3 -m http.server 8082")
-	fmt.Println("   python3 -m http.server 8083")
-	fmt.Println("")
-	fmt.Println("🧪 Testing Load Balancing:")
-	fmt.Println("   1. Start 3 backend servers on ports 8081, 8082, 8083")
-	fmt.Println("   2. Visit https://localhost:9443 multiple times")
-	fmt.Println("   3. Check logs for 🔀 Load Balanced messages")
-	fmt.Printf("   4. Monitor stats: https://%s:9443/api/loadbalancer\n", currentIP)
-	fmt.Println("   5. Try different algorithms via API")
-	fmt.Println("")
-	fmt.Println("🔧 Load Balancer Features:")
-	fmt.Println("   ✅ Round-robin algorithm")
-	fmt.Println("   ✅ Least-connections algorithm")
-	fmt.Println("   ✅ Health checking (every 10 seconds)")
-	fmt.Println("   ✅ Backend statistics")
-	fmt.Println("   ✅ HTTP/3 + QUIC compatibility")
-	fmt.Println("   ✅ Connection migration support")
-	fmt.Println("")
-	fmt.Println("📱 Mobile Testing Steps:")
-	fmt.Println("   1. Connect your phone to the same WiFi network")
-	fmt.Printf("   2. Open Chrome/Safari and go to: https://%s:9443\n", currentIP)
-	fmt.Println("   3. Accept the security warning (self-signed certificate)")
-	fmt.Println("   4. Click 'Test API Endpoint' while on WiFi")
-	fmt.Println("   5. Switch to mobile data/cellular")
-	fmt.Println("   6. Click 'Test API Endpoint' again")
-	fmt.Println("   7. Check 'View Connections' to see migration!")
-	fmt.Println("")
-	fmt.Println("🔧 Mobile Troubleshooting:")
-	fmt.Printf("   • If HTTPS doesn't work, try HTTP: http://%s:8080\n", currentIP)
-	fmt.Println("   • Accept certificate warnings in browser")
-	fmt.Println("   • Make sure phone and computer are on same WiFi")
-	fmt.Println("   • Check firewall settings if connection fails")
-	fmt.Println("")
-	fmt.Println("🧪 Connection Migration Reality Check:")
-	fmt.Println("   ⚠️  IMPORTANT: When you switch from WiFi to cellular:")
-	fmt.Printf("   📱 Your phone CANNOT reach %s from cellular network\n", currentIP)
-	fmt.Println("   🔄 Migration works when staying on the SAME network")
-	fmt.Println("   🔄 Or when using a publicly accessible server")
-	fmt.Println("")
-	fmt.Println("🧪 Real Migration Testing Options:")
-	fmt.Println("   Option 1: Test on same network with different connections")
-	fmt.Println("   • Use WiFi repeater or different WiFi bands (2.4GHz vs 5GHz)")
-	fmt.Println("   • Switch between WiFi and Ethernet on same network")
-	fmt.Println("")
-	fmt.Println("   Option 2: Set up port forwarding (Advanced)")
-	fmt.Println("   • Configure router to forward port 9443 to this computer")
-	fmt.Println("   • Then cellular can reach: https://203.95.199.46:9443")
-	fmt.Println("")
-	fmt.Println("   Option 3: Local Network Testing (RECOMMENDED)")
-	fmt.Println("   • Use the local IP address for real HTTP/3 testing")
-	fmt.Println("   • Run: ./start-local-testing.sh")
-	fmt.Printf("   • Phone URL: https://%s:9443\n", currentIP)
-	fmt.Println("   • This enables REAL HTTP/3 connection migration testing!")
-	fmt.Println("   • No tunnel limitations - direct QUIC/UDP connection")
-	fmt.Println("")
-	fmt.Println("✨ Look for the 🚀 emoji in logs to spot HTTP/3 requests!")
-	fmt.Println("🔄 Look for the 🔄 emoji to spot connection migrations!")
-	fmt.Println("🔄 Try refreshing the page multiple times to activate HTTP/3")
-	fmt.Println("")
+	log.Println("🚀 Starting QUIC HTTP/3 Load Balancer")
+	log.Printf("� Server: https://localhost:9443")
+	log.Printf("🌐 Local IP: %s", currentIP)
+	log.Printf("� Dashboard: https://localhost:9443/")
+
 	// Start a simple HTTP server for comparison
 	go func() {
 		httpServer := &http.Server{
@@ -775,19 +705,6 @@ func main() {
 			log.Printf("HTTP server error: %v", err)
 		}
 	}()
-
-	fmt.Println("🧪 Testing commands:")
-	fmt.Println("   curl -v --http3-only -k https://localhost:9443/api/test")
-	fmt.Println("   curl -v --http3-only -k https://localhost:9443/api/connections")
-	fmt.Println("   curl -v --http2 -k https://localhost:9443/api/test")
-	fmt.Println("   curl -v http://localhost:8080/api/test")
-	fmt.Println("")
-	fmt.Println("🔧 Troubleshooting:")
-	fmt.Println("   1. Run 'mkcert -install' to trust the CA")
-	fmt.Println("   2. Try http://localhost:8080 first (no TLS)")
-	fmt.Println("   3. Enable chrome://flags/#allow-insecure-localhost")
-	fmt.Println("   4. Use Chrome DevTools Network tab to see HTTP/3 usage")
-	fmt.Println("")
 
 	log.Println("🚀 HTTP/3 server starting...")
 	err := h3Server.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem")
