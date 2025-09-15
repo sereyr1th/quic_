@@ -15,8 +15,9 @@ services:
     image: quic-server:latest
     container_name: quic-server
     ports:
-      - "9443:9443"  # QUIC/HTTP3 server
-      - "8080:8080"  # HTTP server
+      - "9443:9443/tcp"  # HTTP/2 server
+      - "9443:9443/udp"  # QUIC/HTTP3 server
+      - "8080:8080"      # HTTP server
     networks:
       - quic-network
     environment:
@@ -24,8 +25,6 @@ services:
       - BACKEND_1_URL=http://quic-backend1:8000
       - BACKEND_2_URL=http://quic-backend2:8000
       - BACKEND_3_URL=http://quic-backend3:8000
-    volumes:
-      - ./app.log:/root/app.log
     restart: unless-stopped
     depends_on:
       - backend1
