@@ -18,6 +18,11 @@ docker compose up -d
 docker compose down
 ```
 
+### View Logs
+```bash
+docker compose logs -f
+```
+
 ## 📋 Services
 
 | Service | URL | Description |
@@ -42,19 +47,27 @@ docker compose down
 
 ## 🛠 Development
 
-### Manual Docker Commands
+### Docker Commands
 ```bash
 # Build and start all services
 docker compose up --build -d
 
-# View logs
-docker compose logs -f [service_name]
+# View logs for specific service
+docker compose logs -f quic-server
+docker compose logs -f prometheus
+docker compose logs -f grafana
 
-# Stop services
+# Restart specific service
+docker compose restart quic-server
+
+# Stop and remove everything
 docker compose down
 
-# Rebuild specific service
-docker compose up --build -d [service_name]
+# Remove volumes too (warning: deletes data)
+docker compose down -v
+
+# Check service status
+docker compose ps
 ```
 
 ### Project Structure
