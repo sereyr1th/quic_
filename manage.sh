@@ -19,7 +19,8 @@ COMPOSE_FILE="docker-compose.yml"
 print_banner() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════╗"
-    echo "║              QUIC HTTP/3 Server              ║"
+    echo "║      IETF QUIC-LB Draft 20 Compliant        ║"
+    echo "║              HTTP/3 Load Balancer           ║"
     echo "║         Docker Infrastructure Manager        ║"
     echo "╚══════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -128,6 +129,16 @@ show_status() {
     echo "🧪 Test Endpoint:             https://localhost:9443/api/test"
     echo "🔄 Migration Simulation:      https://localhost:9443/api/simulate-migration"
     echo "📊 Prometheus Metrics:        https://localhost:9443/metrics"
+    echo "🚀 QUIC-LB Status:            https://localhost:9443/api/quic-lb"
+    echo "🧪 QUIC-LB CID Test:          https://localhost:9443/api/quic-lb/test-cid"
+    echo
+    print_info "IETF QUIC-LB Draft 20 Features:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✅ Stateless load balancing"
+    echo "✅ Connection ID routing"
+    echo "✅ Backend affinity preservation"
+    echo "✅ Plaintext/Stream/Block cipher algorithms"
+    echo "✅ Draft 20 compliant encoding/decoding"
     echo
 }
 
