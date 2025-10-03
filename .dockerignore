@@ -22,22 +22,31 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+*~
 
-# Build artifacts (not needed in context, we build inside container)
-# Uncomment if you have local builds
-# main
-# *.exe
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Docker files
-docker-compose.monitoring.yml
+# Logs
+*.log
 
-# Monitoring data (will be in volumes)
-prometheus_data/
-grafana_data/
+# Temporary files
+*.tmp
+*.temp
 
-# Shell scripts that are not needed in container
-start-backends.sh
-start-monitoring.sh
-status.sh
-test-metrics.sh
-start-docker.sh
+# Certificate backups (keep the main ones)
+*.pem.backup
+*.key.backup
+
+# Build artifacts
+dist/
+build/
+
+# Test results
+test-results/

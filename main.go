@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -25,7 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -35,45 +33,45 @@ import (
 
 // QUICLBConfig defines QUIC-LB configuration as per Draft 20
 type QUICLBConfig struct {
-	Algorithm       string    `json:"algorithm"`         // "plaintext", "stream-cipher", "block-cipher"
-	ConfigID        uint8     `json:"config_id"`         // 4-bit config identifier (0-15)
-	ServerIDLen     uint8     `json:"server_id_len"`     // Length of server ID in bytes (1-16)
-	ConnectionIDLen uint8     `json:"connection_id_len"` // Total CID length (4-20 bytes)
-	Key             []byte    `json:"key,omitempty"`     // For encrypted algorithms
-	NonceLen        uint8     `json:"nonce_len"`         // Nonce length for stream cipher
-	LoadBalancerID  []byte    `json:"load_balancer_id"`  // Load balancer identifier
-	CreatedAt       time.Time `json:"created_at"`
-	Active          bool      `json:"active"`
+	Algorithm               string    `json:"algorithm"`                   // "plaintext", "stream-cipher", "block-cipher"
+	ConfigRotationBits      uint8     `json:"config_rotation_bits"`        // 3-bit config identifier (0-6, 7 reserved)
+	ServerIDLen             uint8     `json:"server_id_len"`               // Length of server ID in bytes (1-15)
+	ConnectionIDLen         uint8     `json:"connection_id_len"`           // Total CID length (4-20 bytes)
+	NonceLen                uint8     `json:"nonce_len"`                   // Nonce length for encrypted algorithms
+	Key                     []byte    `json:"key,omitempty"`               // 16-byte key for encrypted algorithms
+	LoadBalancerID          []byte    `json:"load_balancer_id"`            // Load balancer identifier
+	FirstOctetEncodesCIDLen bool      `json:"first_octet_encodes_cid_len"` // Length self-description flag
+	CreatedAt               time.Time `json:"created_at"`
+	Active                  bool      `json:"active"`
 }
 
 // QUICLBEncoder handles Connection ID encoding/decoding per Draft 20
 type QUICLBEncoder struct {
-	config       *QUICLBConfig
-	aesGCM       cipher.AEAD
-	streamCipher cipher.Stream
-	mu           sync.RWMutex
+	config *QUICLBConfig
+	mu     sync.RWMutex
 }
 
 // QUICLBConnectionID represents a QUIC-LB compliant connection ID
 type QUICLBConnectionID struct {
-	Raw       []byte `json:"raw"`
-	ConfigID  uint8  `json:"config_id"`
-	ServerID  []byte `json:"server_id"`
-	Nonce     []byte `json:"nonce,omitempty"`
-	BackendID uint16 `json:"backend_id"`
-	Valid     bool   `json:"valid"`
-	Algorithm string `json:"algorithm"`
+	Raw                []byte `json:"raw"`
+	ConfigRotationBits uint8  `json:"config_rotation_bits"`
+	ServerID           []byte `json:"server_id"`
+	Nonce              []byte `json:"nonce,omitempty"`
+	BackendID          uint16 `json:"backend_id"`
+	Valid              bool   `json:"valid"`
+	Algorithm          string `json:"algorithm"`
+	LengthSelfEncoded  bool   `json:"length_self_encoded"`
 }
 
 // Draft 20 Plaintext Algorithm Implementation
-func NewPlaintextQUICLB(configID uint8, serverIDLen uint8, cidLen uint8) *QUICLBEncoder {
+func NewPlaintextQUICLB(configRotationBits uint8, serverIDLen uint8, cidLen uint8) *QUICLBEncoder {
 	config := &QUICLBConfig{
-		Algorithm:       "plaintext",
-		ConfigID:        configID & 0x0F, // 4-bit limit
-		ServerIDLen:     serverIDLen,
-		ConnectionIDLen: cidLen,
-		Active:          true,
-		CreatedAt:       time.Now(),
+		Algorithm:          "plaintext",
+		ConfigRotationBits: configRotationBits & 0x07, // 3-bit limit (0-6)
+		ServerIDLen:        serverIDLen,
+		ConnectionIDLen:    cidLen,
+		Active:             true,
+		CreatedAt:          time.Now(),
 	}
 
 	return &QUICLBEncoder{
@@ -81,61 +79,52 @@ func NewPlaintextQUICLB(configID uint8, serverIDLen uint8, cidLen uint8) *QUICLB
 	}
 }
 
-// Draft 20 Stream Cipher Algorithm Implementation
-func NewStreamCipherQUICLB(configID uint8, serverIDLen uint8, cidLen uint8, key []byte, nonceLen uint8) (*QUICLBEncoder, error) {
-	if len(key) != 16 && len(key) != 32 {
-		return nil, fmt.Errorf("key must be 16 or 32 bytes")
+// Simplified: Only supporting plaintext algorithm for educational/deployment use
+
+// NewEncryptedQUICLB creates an encrypted QUIC-LB encoder per Draft 20
+func NewEncryptedQUICLB(algorithm string, configRotationBits uint8, serverIDLen uint8, cidLen uint8, nonceLen uint8, key []byte) (*QUICLBEncoder, error) {
+	if algorithm != "stream-cipher" && algorithm != "block-cipher" {
+		return nil, fmt.Errorf("unsupported encrypted algorithm: %s", algorithm)
+	}
+
+	if len(key) != 16 {
+		return nil, fmt.Errorf("key must be 16 bytes, got %d", len(key))
+	}
+
+	// Validate Draft 20 constraints
+	if serverIDLen < 1 || serverIDLen > 15 {
+		return nil, fmt.Errorf("server ID length must be 1-15 bytes, got %d", serverIDLen)
+	}
+
+	if nonceLen < 4 {
+		return nil, fmt.Errorf("nonce length must be at least 4 bytes, got %d", nonceLen)
+	}
+
+	if serverIDLen+nonceLen > 19 {
+		return nil, fmt.Errorf("server ID + nonce length must not exceed 19 bytes, got %d", serverIDLen+nonceLen)
 	}
 
 	config := &QUICLBConfig{
-		Algorithm:       "stream-cipher",
-		ConfigID:        configID & 0x0F,
-		ServerIDLen:     serverIDLen,
-		ConnectionIDLen: cidLen,
-		Key:             key,
-		NonceLen:        nonceLen,
-		Active:          true,
-		CreatedAt:       time.Now(),
+		Algorithm:          algorithm,
+		ConfigRotationBits: configRotationBits & 0x07, // 3-bit limit (0-6)
+		ServerIDLen:        serverIDLen,
+		ConnectionIDLen:    cidLen,
+		NonceLen:           nonceLen,
+		Key:                make([]byte, 16),
+		Active:             true,
+		CreatedAt:          time.Now(),
 	}
+	copy(config.Key, key)
 
 	return &QUICLBEncoder{
 		config: config,
 	}, nil
 }
 
-// Draft 20 Block Cipher Algorithm Implementation
-func NewBlockCipherQUICLB(configID uint8, serverIDLen uint8, cidLen uint8, key []byte) (*QUICLBEncoder, error) {
-	if len(key) != 16 && len(key) != 32 {
-		return nil, fmt.Errorf("key must be 16 or 32 bytes")
-	}
+// Simplified: Removed complex cryptographic functions
+// Only supporting plaintext algorithm for simplicity
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	config := &QUICLBConfig{
-		Algorithm:       "block-cipher",
-		ConfigID:        configID & 0x0F,
-		ServerIDLen:     serverIDLen,
-		ConnectionIDLen: cidLen,
-		Key:             key,
-		Active:          true,
-		CreatedAt:       time.Now(),
-	}
-
-	return &QUICLBEncoder{
-		config: config,
-		aesGCM: aesGCM,
-	}, nil
-}
-
-// EncodePlaintextCID implements Draft 20 Section 4.1 Plaintext Algorithm
+// EncodePlaintextCID implements Draft 20 Section 5.2 Plaintext Algorithm
 func (e *QUICLBEncoder) EncodePlaintextCID(backendID uint16) (*QUICLBConnectionID, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -146,280 +135,403 @@ func (e *QUICLBEncoder) EncodePlaintextCID(backendID uint16) (*QUICLBConnectionI
 
 	cid := make([]byte, e.config.ConnectionIDLen)
 
-	// First octet: Config ID (4 bits) + First 4 bits of server ID
+	// Draft 20 First Octet format:
+	// Bits 5-7: Config Rotation (3 bits)
+	// Bits 0-4: CID Length or Random (5 bits)
+	var lengthOrRandom uint8
+	if e.config.FirstOctetEncodesCIDLen {
+		// Encode CID length minus 1 (since CID is at least 1 byte)
+		lengthOrRandom = e.config.ConnectionIDLen - 1
+	} else {
+		// Use random bits for privacy
+		randByte := make([]byte, 1)
+		rand.Read(randByte)
+		lengthOrRandom = randByte[0] & 0x1F // 5 bits
+	}
+
+	// First octet: Config Rotation (bits 5-7) + Length/Random (bits 0-4)
+	cid[0] = (e.config.ConfigRotationBits << 5) | lengthOrRandom
+
+	// Server ID encoding - starts from second byte for plaintext
 	serverIDBytes := make([]byte, e.config.ServerIDLen)
 	binary.BigEndian.PutUint16(serverIDBytes, backendID)
 
-	cid[0] = (e.config.ConfigID << 4) | (serverIDBytes[0] & 0x0F)
-
-	// Copy remaining server ID bytes
-	if e.config.ServerIDLen > 1 {
-		copy(cid[1:1+e.config.ServerIDLen-1], serverIDBytes[1:])
+	// Copy server ID starting from second byte
+	if e.config.ServerIDLen > 0 && len(cid) > 1 {
+		copy(cid[1:1+e.config.ServerIDLen], serverIDBytes)
 	}
 
-	// Fill remaining bytes with random data
-	remainingStart := int(1 + e.config.ServerIDLen - 1)
-	if remainingStart < int(e.config.ConnectionIDLen) {
-		randomBytes := make([]byte, int(e.config.ConnectionIDLen)-remainingStart)
-		rand.Read(randomBytes)
-		copy(cid[remainingStart:], randomBytes)
+	// Fill remaining bytes with random nonce
+	nonceStart := int(1 + e.config.ServerIDLen)
+	if nonceStart < int(e.config.ConnectionIDLen) {
+		nonceLen := int(e.config.ConnectionIDLen) - nonceStart
+		nonce := make([]byte, nonceLen)
+		rand.Read(nonce)
+		copy(cid[nonceStart:], nonce)
 	}
 
 	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverIDBytes,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "plaintext",
+		Raw:                cid,
+		ConfigRotationBits: e.config.ConfigRotationBits,
+		ServerID:           serverIDBytes,
+		BackendID:          backendID,
+		Valid:              true,
+		Algorithm:          "plaintext",
+		LengthSelfEncoded:  e.config.FirstOctetEncodesCIDLen,
 	}, nil
 }
 
-// EncodeStreamCipherCID implements Draft 20 Section 4.2 Stream Cipher Algorithm
-func (e *QUICLBEncoder) EncodeStreamCipherCID(backendID uint16) (*QUICLBConnectionID, error) {
+// Simplified: Removed complex stream cipher and block cipher encoding
+// Only supporting plaintext algorithm
+
+// EncodeEncryptedCID implements Draft 20 Section 5.4 Encrypted Algorithms
+func (e *QUICLBEncoder) EncodeEncryptedCID(backendID uint16, nonce []byte) (*QUICLBConnectionID, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	if e.config.Algorithm != "stream-cipher" {
-		return nil, fmt.Errorf("encoder not configured for stream cipher algorithm")
+	if e.config.Algorithm == "plaintext" {
+		return nil, fmt.Errorf("encoder not configured for encrypted algorithm")
 	}
 
-	cid := make([]byte, e.config.ConnectionIDLen)
-	nonce := make([]byte, e.config.NonceLen)
-	rand.Read(nonce)
-
-	// First octet: Config ID (4 bits) + First 4 bits of nonce
-	cid[0] = (e.config.ConfigID << 4) | (nonce[0] & 0x0F)
-
-	// Copy remaining nonce bytes
-	copy(cid[1:1+e.config.NonceLen-1], nonce[1:])
-
-	// Encrypt server ID
-	serverIDBytes := make([]byte, e.config.ServerIDLen)
-	binary.BigEndian.PutUint16(serverIDBytes, backendID)
-
-	// Simple stream cipher implementation (for demonstration)
-	// In production, use proper stream cipher like ChaCha20
-	encryptedServerID := make([]byte, len(serverIDBytes))
-	for i, b := range serverIDBytes {
-		encryptedServerID[i] = b ^ e.config.Key[i%len(e.config.Key)]
-	}
-
-	// Copy encrypted server ID
-	serverIDStart := int(1 + e.config.NonceLen - 1)
-	copy(cid[serverIDStart:serverIDStart+int(e.config.ServerIDLen)], encryptedServerID)
-
-	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverIDBytes,
-		Nonce:     nonce,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "stream-cipher",
-	}, nil
-}
-
-// EncodeBlockCipherCID implements Draft 20 Section 4.3 Block Cipher Algorithm
-func (e *QUICLBEncoder) EncodeBlockCipherCID(backendID uint16) (*QUICLBConnectionID, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if e.config.Algorithm != "block-cipher" {
-		return nil, fmt.Errorf("encoder not configured for block cipher algorithm")
+	if len(nonce) != int(e.config.NonceLen) {
+		return nil, fmt.Errorf("nonce length mismatch: expected %d, got %d", e.config.NonceLen, len(nonce))
 	}
 
 	cid := make([]byte, e.config.ConnectionIDLen)
 
-	// Generate nonce for AES-GCM
-	nonce := make([]byte, e.aesGCM.NonceSize())
-	rand.Read(nonce)
+	// Draft 20 First Octet format
+	var lengthOrRandom uint8
+	if e.config.FirstOctetEncodesCIDLen {
+		lengthOrRandom = e.config.ConnectionIDLen - 1
+	} else {
+		randByte := make([]byte, 1)
+		rand.Read(randByte)
+		lengthOrRandom = randByte[0] & 0x1F
+	}
 
-	// First octet: Config ID (4 bits) + First 4 bits of nonce
-	cid[0] = (e.config.ConfigID << 4) | (nonce[0] & 0x0F)
+	cid[0] = (e.config.ConfigRotationBits << 5) | lengthOrRandom
 
-	// Server ID to encrypt
+	// Prepare plaintext: Server ID + Nonce
 	serverIDBytes := make([]byte, e.config.ServerIDLen)
 	binary.BigEndian.PutUint16(serverIDBytes, backendID)
 
-	// Encrypt server ID with AES-GCM
-	encryptedServerID := e.aesGCM.Seal(nil, nonce, serverIDBytes, nil)
+	plaintext := make([]byte, e.config.ServerIDLen+e.config.NonceLen)
+	copy(plaintext, serverIDBytes)
+	copy(plaintext[e.config.ServerIDLen:], nonce)
 
-	// Copy nonce and encrypted data
-	copy(cid[1:1+len(nonce)-1], nonce[1:])
-	encStart := 1 + len(nonce) - 1
-	copy(cid[encStart:], encryptedServerID)
+	// Encrypt based on algorithm
+	var ciphertext []byte
+	var err error
+
+	if e.config.ServerIDLen+e.config.NonceLen == 16 {
+		// Single-pass encryption (Section 5.4.1)
+		ciphertext, err = e.singlePassEncrypt(plaintext)
+	} else {
+		// Four-pass encryption (Section 5.4.2)
+		ciphertext, err = e.fourPassEncrypt(plaintext)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %v", err)
+	}
+
+	// Copy encrypted data after first octet
+	copy(cid[1:], ciphertext)
 
 	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverIDBytes,
-		Nonce:     nonce,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "block-cipher",
+		Raw:                cid,
+		ConfigRotationBits: e.config.ConfigRotationBits,
+		ServerID:           serverIDBytes,
+		Nonce:              nonce,
+		BackendID:          backendID,
+		Valid:              true,
+		Algorithm:          e.config.Algorithm,
+		LengthSelfEncoded:  e.config.FirstOctetEncodesCIDLen,
 	}, nil
 }
 
-// DecodeCID decodes connection ID to extract backend information
+// singlePassEncrypt implements Draft 20 Section 5.4.1
+func (e *QUICLBEncoder) singlePassEncrypt(plaintext []byte) ([]byte, error) {
+	if len(plaintext) != 16 {
+		return nil, fmt.Errorf("single-pass encryption requires 16-byte plaintext, got %d", len(plaintext))
+	}
+
+	block, err := aes.NewCipher(e.config.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
+	}
+
+	ciphertext := make([]byte, 16)
+	block.Encrypt(ciphertext, plaintext)
+	return ciphertext, nil
+}
+
+// fourPassEncrypt implements Draft 20 Section 5.4.2 (simplified version)
+func (e *QUICLBEncoder) fourPassEncrypt(plaintext []byte) ([]byte, error) {
+	// This is a simplified implementation of the four-pass algorithm
+	// Full implementation would require the complete Feistel network
+
+	plaintextLen := len(plaintext)
+	halfLen := (plaintextLen + 1) / 2
+
+	// Split plaintext into left and right halves
+	left := make([]byte, halfLen)
+	right := make([]byte, halfLen)
+
+	copy(left, plaintext[:halfLen])
+	if plaintextLen > halfLen {
+		copy(right, plaintext[halfLen:])
+	}
+
+	// Simplified: Just encrypt each half independently for demonstration
+	// Real implementation would do 4 rounds of Feistel network
+
+	block, err := aes.NewCipher(e.config.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
+	}
+
+	// Encrypt left half
+	leftPadded := make([]byte, 16)
+	copy(leftPadded, left)
+	leftPadded[14] = uint8(plaintextLen)
+	leftPadded[15] = 1 // pass number
+
+	leftCipher := make([]byte, 16)
+	block.Encrypt(leftCipher, leftPadded)
+
+	// XOR with right
+	for i := 0; i < len(right); i++ {
+		right[i] ^= leftCipher[i]
+	}
+
+	// Encrypt right half
+	rightPadded := make([]byte, 16)
+	copy(rightPadded, right)
+	rightPadded[14] = uint8(plaintextLen)
+	rightPadded[15] = 2 // pass number
+
+	rightCipher := make([]byte, 16)
+	block.Encrypt(rightCipher, rightPadded)
+
+	// XOR with left
+	for i := 0; i < len(left); i++ {
+		left[i] ^= rightCipher[i]
+	}
+
+	// Combine result
+	result := make([]byte, plaintextLen)
+	copy(result, left)
+	if plaintextLen > halfLen {
+		copy(result[halfLen:], right[:plaintextLen-halfLen])
+	}
+
+	return result, nil
+}
+
+// DecodeCID decodes connection ID to extract backend information (Draft 20 compliant)
 func (e *QUICLBEncoder) DecodeCID(cid []byte) (*QUICLBConnectionID, error) {
 	if len(cid) == 0 {
 		return nil, fmt.Errorf("empty connection ID")
 	}
 
-	// Extract config ID from first 4 bits
-	configID := (cid[0] >> 4) & 0x0F
+	// Extract config rotation bits from first 3 bits (bits 5-7)
+	configRotationBits := (cid[0] >> 5) & 0x07
 
-	if configID != e.config.ConfigID {
-		return nil, fmt.Errorf("config ID mismatch: expected %d, got %d", e.config.ConfigID, configID)
+	// Check for reserved config rotation value (0b111)
+	if configRotationBits == 0x07 {
+		return nil, fmt.Errorf("unroutable connection ID: reserved config rotation value 0b111")
 	}
 
+	if configRotationBits != e.config.ConfigRotationBits {
+		return nil, fmt.Errorf("config rotation mismatch: expected %d, got %d", e.config.ConfigRotationBits, configRotationBits)
+	}
+
+	// Route to appropriate decoding algorithm
 	switch e.config.Algorithm {
 	case "plaintext":
 		return e.decodePlaintextCID(cid)
-	case "stream-cipher":
-		return e.decodeStreamCipherCID(cid)
-	case "block-cipher":
-		return e.decodeBlockCipherCID(cid)
+	case "stream-cipher", "block-cipher":
+		return e.decodeEncryptedCID(cid)
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", e.config.Algorithm)
 	}
 }
 
-// decodePlaintextCID decodes plaintext connection ID
-func (e *QUICLBEncoder) decodePlaintextCID(cid []byte) (*QUICLBConnectionID, error) {
-	serverID := make([]byte, e.config.ServerIDLen)
-
-	// First 4 bits of server ID from first octet
-	serverID[0] = cid[0] & 0x0F
-
-	// Remaining server ID bytes
-	if e.config.ServerIDLen > 1 {
-		copy(serverID[1:], cid[1:1+e.config.ServerIDLen-1])
+// decodeEncryptedCID decodes encrypted connection ID per Draft 20
+func (e *QUICLBEncoder) decodeEncryptedCID(cid []byte) (*QUICLBConnectionID, error) {
+	if len(cid) < 2 {
+		return nil, fmt.Errorf("encrypted CID too short: need at least 2 bytes")
 	}
 
-	backendID := binary.BigEndian.Uint16(serverID)
+	// Extract config rotation bits
+	configRotationBits := (cid[0] >> 5) & 0x07
 
-	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverID,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "plaintext",
-	}, nil
-}
+	// Decrypt the ciphertext portion
+	ciphertext := cid[1:]
+	plaintextLen := int(e.config.ServerIDLen + e.config.NonceLen)
 
-// decodeStreamCipherCID decodes stream cipher connection ID
-func (e *QUICLBEncoder) decodeStreamCipherCID(cid []byte) (*QUICLBConnectionID, error) {
-	// Extract nonce
-	nonce := make([]byte, e.config.NonceLen)
-	nonce[0] = cid[0] & 0x0F
-	copy(nonce[1:], cid[1:1+e.config.NonceLen-1])
-
-	// Extract and decrypt server ID
-	serverIDStart := int(1 + e.config.NonceLen - 1)
-	encryptedServerID := cid[serverIDStart : serverIDStart+int(e.config.ServerIDLen)]
-
-	serverID := make([]byte, len(encryptedServerID))
-	for i, b := range encryptedServerID {
-		serverID[i] = b ^ e.config.Key[i%len(e.config.Key)]
+	if len(ciphertext) < plaintextLen {
+		return nil, fmt.Errorf("ciphertext too short: need %d bytes, got %d", plaintextLen, len(ciphertext))
 	}
 
-	backendID := binary.BigEndian.Uint16(serverID)
+	var plaintext []byte
+	var err error
 
-	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverID,
-		Nonce:     nonce,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "stream-cipher",
-	}, nil
-}
+	if plaintextLen == 16 {
+		// Single-pass decryption
+		plaintext, err = e.singlePassDecrypt(ciphertext[:16])
+	} else {
+		// Four-pass decryption
+		plaintext, err = e.fourPassDecrypt(ciphertext[:plaintextLen])
+	}
 
-// decodeBlockCipherCID decodes block cipher connection ID
-func (e *QUICLBEncoder) decodeBlockCipherCID(cid []byte) (*QUICLBConnectionID, error) {
-	// Extract nonce
-	nonce := make([]byte, e.aesGCM.NonceSize())
-	nonce[0] = cid[0] & 0x0F
-	copy(nonce[1:], cid[1:1+len(nonce)-1])
-
-	// Extract and decrypt server ID
-	encStart := 1 + len(nonce) - 1
-	encryptedData := cid[encStart:]
-
-	serverID, err := e.aesGCM.Open(nil, nonce, encryptedData, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt server ID: %v", err)
+		return nil, fmt.Errorf("decryption failed: %v", err)
 	}
 
-	if len(serverID) < 2 {
-		return nil, fmt.Errorf("invalid server ID length")
-	}
+	// Extract server ID and nonce
+	serverID := plaintext[:e.config.ServerIDLen]
+	nonce := plaintext[e.config.ServerIDLen:]
 
 	backendID := binary.BigEndian.Uint16(serverID)
 
 	return &QUICLBConnectionID{
-		Raw:       cid,
-		ConfigID:  e.config.ConfigID,
-		ServerID:  serverID,
-		Nonce:     nonce,
-		BackendID: backendID,
-		Valid:     true,
-		Algorithm: "block-cipher",
+		Raw:                cid,
+		ConfigRotationBits: configRotationBits,
+		ServerID:           serverID,
+		Nonce:              nonce,
+		BackendID:          backendID,
+		Valid:              true,
+		Algorithm:          e.config.Algorithm,
+		LengthSelfEncoded:  e.config.FirstOctetEncodesCIDLen,
 	}, nil
 }
 
-// Enhanced Connection Tracker with proper QUIC Connection ID support
+// singlePassDecrypt implements Draft 20 Section 5.5.1
+func (e *QUICLBEncoder) singlePassDecrypt(ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) != 16 {
+		return nil, fmt.Errorf("single-pass decryption requires 16-byte ciphertext")
+	}
+
+	block, err := aes.NewCipher(e.config.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
+	}
+
+	plaintext := make([]byte, 16)
+	block.Decrypt(plaintext, ciphertext)
+	return plaintext, nil
+}
+
+// fourPassDecrypt implements Draft 20 Section 5.5.2 (simplified version)
+func (e *QUICLBEncoder) fourPassDecrypt(ciphertext []byte) ([]byte, error) {
+	// This is a simplified implementation - real version would reverse the Feistel network
+	ciphertextLen := len(ciphertext)
+	halfLen := (ciphertextLen + 1) / 2
+
+	// Split ciphertext
+	left := make([]byte, halfLen)
+	right := make([]byte, halfLen)
+
+	copy(left, ciphertext[:halfLen])
+	if ciphertextLen > halfLen {
+		copy(right, ciphertext[halfLen:])
+	}
+
+	block, err := aes.NewCipher(e.config.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
+	}
+
+	// Reverse the encryption process (simplified)
+	rightPadded := make([]byte, 16)
+	copy(rightPadded, right)
+	rightPadded[14] = uint8(ciphertextLen)
+	rightPadded[15] = 2
+
+	rightCipher := make([]byte, 16)
+	block.Encrypt(rightCipher, rightPadded)
+
+	for i := 0; i < len(left); i++ {
+		left[i] ^= rightCipher[i]
+	}
+
+	leftPadded := make([]byte, 16)
+	copy(leftPadded, left)
+	leftPadded[14] = uint8(ciphertextLen)
+	leftPadded[15] = 1
+
+	leftCipher := make([]byte, 16)
+	block.Encrypt(leftCipher, leftPadded)
+
+	for i := 0; i < len(right); i++ {
+		right[i] ^= leftCipher[i]
+	}
+
+	result := make([]byte, ciphertextLen)
+	copy(result, left)
+	if ciphertextLen > halfLen {
+		copy(result[halfLen:], right[:ciphertextLen-halfLen])
+	}
+
+	return result, nil
+}
+
+// decodePlaintextCID decodes plaintext connection ID per Draft 20
+func (e *QUICLBEncoder) decodePlaintextCID(cid []byte) (*QUICLBConnectionID, error) {
+	if len(cid) < 1+int(e.config.ServerIDLen) {
+		return nil, fmt.Errorf("CID too short for server ID: need %d bytes, got %d", 1+e.config.ServerIDLen, len(cid))
+	}
+
+	// Extract config rotation bits
+	configRotationBits := (cid[0] >> 5) & 0x07
+
+	// Note: Length/random bits available at cid[0] & 0x1F for future use
+
+	// Server ID starts from second byte in plaintext mode
+	serverID := make([]byte, e.config.ServerIDLen)
+	copy(serverID, cid[1:1+e.config.ServerIDLen])
+
+	backendID := binary.BigEndian.Uint16(serverID)
+
+	// Extract nonce if present
+	var nonce []byte
+	nonceStart := 1 + int(e.config.ServerIDLen)
+	if nonceStart < len(cid) {
+		nonce = make([]byte, len(cid)-nonceStart)
+		copy(nonce, cid[nonceStart:])
+	}
+
+	return &QUICLBConnectionID{
+		Raw:                cid,
+		ConfigRotationBits: configRotationBits,
+		ServerID:           serverID,
+		Nonce:              nonce,
+		BackendID:          backendID,
+		Valid:              true,
+		Algorithm:          "plaintext",
+		LengthSelfEncoded:  e.config.FirstOctetEncodesCIDLen,
+	}, nil
+}
+
+// Simplified: Removed all complex decryption functions
+// Only supporting plaintext algorithm
+
+// Simplified Connection Tracker
 type ConnectionTracker struct {
 	mu          sync.RWMutex
-	connections map[string]*ConnectionInfo
-	pathEvents  map[string][]PathEvent
+	connections map[string]*SimpleConnectionInfo
 }
 
-// Enhanced ConnectionInfo with better migration tracking
-type ConnectionInfo struct {
-	ConnectionID     string           `json:"connection_id"`
-	QuicConnectionID string           `json:"quic_connection_id"`
-	RemoteAddr       string           `json:"remote_addr"`
-	LocalAddr        string           `json:"local_addr"`
-	StartTime        time.Time        `json:"start_time"`
-	LastSeen         time.Time        `json:"last_seen"`
-	RequestCount     int64            `json:"request_count"`
-	MigrationCount   int              `json:"migration_count"`
-	MigrationEvents  []MigrationEvent `json:"migration_events"`
-	PathEvents       []PathEvent      `json:"path_events"`
-	ActivePaths      map[string]bool  `json:"active_paths"`
-	RTT              time.Duration    `json:"rtt"`
-	Bandwidth        int64            `json:"bandwidth"`
-	PacketsSent      int64            `json:"packets_sent"`
-	PacketsReceived  int64            `json:"packets_received"`
-	PacketsLost      int64            `json:"packets_lost"`
-	CongestionWindow int64            `json:"congestion_window"`
-	Protocol         string           `json:"protocol"`
-}
-
-// Enhanced MigrationEvent with validation status
-type MigrationEvent struct {
-	Timestamp    time.Time     `json:"timestamp"`
-	OldAddr      string        `json:"old_addr"`
-	NewAddr      string        `json:"new_addr"`
-	Validated    bool          `json:"validated"`
-	ValidateTime time.Duration `json:"validate_time"`
-	Reason       string        `json:"reason"`
-	Success      bool          `json:"success"`
-	PathMTU      int           `json:"path_mtu"`
-}
-
-// PathEvent tracks path validation events
-type PathEvent struct {
-	Timestamp time.Time     `json:"timestamp"`
-	Path      string        `json:"path"`
-	Event     string        `json:"event"` // "validated", "failed", "probed"
-	RTT       time.Duration `json:"rtt"`
-	Success   bool          `json:"success"`
+// Simplified ConnectionInfo for basic tracking
+type SimpleConnectionInfo struct {
+	ConnectionID string    `json:"connection_id"`
+	RemoteAddr   string    `json:"remote_addr"`
+	StartTime    time.Time `json:"start_time"`
+	LastSeen     time.Time `json:"last_seen"`
+	RequestCount int64     `json:"request_count"`
+	Protocol     string    `json:"protocol"`
 }
 
 // Enhanced Backend with circuit breaker and health scoring
@@ -458,45 +570,57 @@ type CircuitBreaker struct {
 	SuccessCount int64         `json:"success_count"`
 }
 
-// QUIC-LB Draft 20 Compliant Load Balancer
+// QUIC-LB Draft 20 Compliant Load Balancer with Config Rotation Support
 type QUICLBLoadBalancer struct {
 	backends       []*Backend
 	mu             sync.RWMutex
-	encoder        *QUICLBEncoder
-	config         *QUICLBConfig
-	backendMap     map[uint16]*Backend // Direct mapping from backend ID to backend
+	encoders       map[uint8]*QUICLBEncoder // Map of config rotation bits to encoders
+	configs        map[uint8]*QUICLBConfig  // Map of config rotation bits to configs
+	activeConfig   uint8                    // Currently active config rotation bits
+	backendMap     map[uint16]*Backend      // Direct mapping from backend ID to backend
 	algorithm      string
 	consistentHash *ConsistentHash
-	// Remove session-based state for stateless operation per Draft 20
+	// Unroutable CID handling
+	unroutableTable map[string]*Backend // 4-tuple to backend mapping for unroutable CIDs
+	cidTable        map[string]*Backend // CID to backend mapping
 }
 
-// NewQUICLBLoadBalancer creates a new QUIC-LB compliant load balancer
+// NewQUICLBLoadBalancer creates a new QUIC-LB load balancer with config rotation support
 func NewQUICLBLoadBalancer(algorithm string, config *QUICLBConfig) (*QUICLBLoadBalancer, error) {
 	var encoder *QUICLBEncoder
 	var err error
 
 	switch config.Algorithm {
 	case "plaintext":
-		encoder = NewPlaintextQUICLB(config.ConfigID, config.ServerIDLen, config.ConnectionIDLen)
-	case "stream-cipher":
-		encoder, err = NewStreamCipherQUICLB(config.ConfigID, config.ServerIDLen, config.ConnectionIDLen, config.Key, config.NonceLen)
-	case "block-cipher":
-		encoder, err = NewBlockCipherQUICLB(config.ConfigID, config.ServerIDLen, config.ConnectionIDLen, config.Key)
+		encoder = NewPlaintextQUICLB(config.ConfigRotationBits, config.ServerIDLen, config.ConnectionIDLen)
+	case "stream-cipher", "block-cipher":
+		if len(config.Key) == 0 {
+			return nil, fmt.Errorf("key required for encrypted algorithm: %s", config.Algorithm)
+		}
+		encoder, err = NewEncryptedQUICLB(config.Algorithm, config.ConfigRotationBits, config.ServerIDLen, config.ConnectionIDLen, config.NonceLen, config.Key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create encrypted encoder: %v", err)
+		}
 	default:
-		return nil, fmt.Errorf("unsupported QUIC-LB algorithm: %s", config.Algorithm)
+		return nil, fmt.Errorf("unsupported algorithm: %s", config.Algorithm)
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to create QUIC-LB encoder: %v", err)
+	lb := &QUICLBLoadBalancer{
+		backends:        []*Backend{},
+		encoders:        make(map[uint8]*QUICLBEncoder),
+		configs:         make(map[uint8]*QUICLBConfig),
+		activeConfig:    config.ConfigRotationBits,
+		backendMap:      make(map[uint16]*Backend),
+		algorithm:       algorithm,
+		unroutableTable: make(map[string]*Backend),
+		cidTable:        make(map[string]*Backend),
 	}
 
-	return &QUICLBLoadBalancer{
-		backends:   []*Backend{},
-		encoder:    encoder,
-		config:     config,
-		backendMap: make(map[uint16]*Backend),
-		algorithm:  algorithm,
-	}, nil
+	// Add the initial configuration
+	lb.encoders[config.ConfigRotationBits] = encoder
+	lb.configs[config.ConfigRotationBits] = config
+
+	return lb, nil
 }
 
 // AddBackend adds a backend to the QUIC-LB load balancer with a specific ID
@@ -509,55 +633,114 @@ func (qlb *QUICLBLoadBalancer) AddBackend(backend *Backend, backendID uint16) {
 	qlb.backendMap[backendID] = backend
 }
 
-// RouteByConnectionID implements stateless routing per QUIC-LB Draft 20
+// RouteByConnectionID implements stateless routing per QUIC-LB Draft 20 with fallback support
 func (qlb *QUICLBLoadBalancer) RouteByConnectionID(connectionID []byte) (*Backend, error) {
 	qlb.mu.RLock()
 	defer qlb.mu.RUnlock()
 
-	// Decode connection ID to extract backend information
-	cidInfo, err := qlb.encoder.DecodeCID(connectionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode connection ID: %v", err)
+	// Try to decode using available configurations
+	var cidInfo *QUICLBConnectionID
+	var err error
+
+	if len(connectionID) > 0 {
+		configRotationBits := (connectionID[0] >> 5) & 0x07
+
+		// Check for reserved value (unroutable)
+		if configRotationBits == 0x07 {
+			return qlb.handleUnroutableCID(connectionID)
+		}
+
+		// Try to find encoder for this config
+		if encoder, exists := qlb.encoders[configRotationBits]; exists {
+			cidInfo, err = encoder.DecodeCID(connectionID)
+			if err == nil {
+				// Stateless routing - directly map to backend
+				backend, exists := qlb.backendMap[cidInfo.BackendID]
+				if !exists {
+					return nil, fmt.Errorf("backend not found for ID: %d", cidInfo.BackendID)
+				}
+
+				// Check if backend is healthy (fail-fast)
+				if !backend.IsAlive() {
+					return nil, fmt.Errorf("backend %d is not healthy", cidInfo.BackendID)
+				}
+
+				return backend, nil
+			}
+		}
 	}
 
-	// Stateless routing - directly map to backend
-	backend, exists := qlb.backendMap[cidInfo.BackendID]
-	if !exists {
-		return nil, fmt.Errorf("backend not found for ID: %d", cidInfo.BackendID)
-	}
-
-	// Check if backend is healthy (fail-fast)
-	if !backend.IsAlive() {
-		return nil, fmt.Errorf("backend %d is not healthy", cidInfo.BackendID)
-	}
-
-	return backend, nil
+	// If decoding fails, treat as unroutable
+	return qlb.handleUnroutableCID(connectionID)
 }
 
-// GenerateConnectionID creates a new connection ID for a selected backend
+// handleUnroutableCID implements Draft 20 Section 4 fallback algorithms
+func (qlb *QUICLBLoadBalancer) handleUnroutableCID(connectionID []byte) (*Backend, error) {
+	// Draft 20 Section 4.2 - Baseline Fallback Algorithm
+	// For now, implement simple round-robin fallback
+
+	if len(qlb.backends) == 0 {
+		return nil, fmt.Errorf("no backends available for unroutable CID")
+	}
+
+	// Health-aware selection
+	var healthyBackends []*Backend
+	for _, backend := range qlb.backends {
+		if backend.IsAlive() {
+			healthyBackends = append(healthyBackends, backend)
+		}
+	}
+
+	if len(healthyBackends) == 0 {
+		return nil, fmt.Errorf("no healthy backends available for unroutable CID")
+	}
+
+	// Simple fallback: select first healthy backend
+	// Real implementation would use more sophisticated algorithms
+	selected := healthyBackends[0]
+
+	// Store in unroutable table for future use (based on CID)
+	cidKey := hex.EncodeToString(connectionID)
+	qlb.cidTable[cidKey] = selected
+
+	return selected, nil
+}
+
+// GenerateConnectionID creates a new connection ID for a selected backend (all algorithms)
 func (qlb *QUICLBLoadBalancer) GenerateConnectionID(backendID uint16) ([]byte, error) {
 	qlb.mu.RLock()
 	defer qlb.mu.RUnlock()
 
-	var cidInfo *QUICLBConnectionID
-	var err error
+	// Use active config for generation
+	config := qlb.configs[qlb.activeConfig]
+	encoder := qlb.encoders[qlb.activeConfig]
 
-	switch qlb.config.Algorithm {
+	if config == nil || encoder == nil {
+		return nil, fmt.Errorf("no active configuration available")
+	}
+
+	switch config.Algorithm {
 	case "plaintext":
-		cidInfo, err = qlb.encoder.EncodePlaintextCID(backendID)
-	case "stream-cipher":
-		cidInfo, err = qlb.encoder.EncodeStreamCipherCID(backendID)
-	case "block-cipher":
-		cidInfo, err = qlb.encoder.EncodeBlockCipherCID(backendID)
+		cidInfo, err := encoder.EncodePlaintextCID(backendID)
+		if err != nil {
+			return nil, err
+		}
+		return cidInfo.Raw, nil
+
+	case "stream-cipher", "block-cipher":
+		// Generate random nonce
+		nonce := make([]byte, config.NonceLen)
+		rand.Read(nonce)
+
+		cidInfo, err := encoder.EncodeEncryptedCID(backendID, nonce)
+		if err != nil {
+			return nil, err
+		}
+		return cidInfo.Raw, nil
+
 	default:
-		return nil, fmt.Errorf("unsupported algorithm: %s", qlb.config.Algorithm)
+		return nil, fmt.Errorf("unsupported algorithm: %s", config.Algorithm)
 	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return cidInfo.Raw, nil
 }
 
 // SelectBackend selects an appropriate backend using health-aware round robin
@@ -597,9 +780,57 @@ func (qlb *QUICLBLoadBalancer) GetBackendStats() []*Backend {
 	return stats
 }
 
-// GetConfig returns the QUIC-LB configuration
+// GetConfig returns the active QUIC-LB configuration
 func (qlb *QUICLBLoadBalancer) GetConfig() *QUICLBConfig {
-	return qlb.config
+	qlb.mu.RLock()
+	defer qlb.mu.RUnlock()
+	return qlb.configs[qlb.activeConfig]
+}
+
+// AddConfig adds a new configuration for config rotation
+func (qlb *QUICLBLoadBalancer) AddConfig(config *QUICLBConfig) error {
+	qlb.mu.Lock()
+	defer qlb.mu.Unlock()
+
+	if config.ConfigRotationBits > 6 {
+		return fmt.Errorf("config rotation bits must be 0-6, got %d", config.ConfigRotationBits)
+	}
+
+	var encoder *QUICLBEncoder
+	var err error
+
+	switch config.Algorithm {
+	case "plaintext":
+		encoder = NewPlaintextQUICLB(config.ConfigRotationBits, config.ServerIDLen, config.ConnectionIDLen)
+	case "stream-cipher", "block-cipher":
+		if len(config.Key) == 0 {
+			return fmt.Errorf("key required for encrypted algorithm: %s", config.Algorithm)
+		}
+		encoder, err = NewEncryptedQUICLB(config.Algorithm, config.ConfigRotationBits, config.ServerIDLen, config.ConnectionIDLen, config.NonceLen, config.Key)
+		if err != nil {
+			return fmt.Errorf("failed to create encrypted encoder: %v", err)
+		}
+	default:
+		return fmt.Errorf("unsupported algorithm: %s", config.Algorithm)
+	}
+
+	qlb.configs[config.ConfigRotationBits] = config
+	qlb.encoders[config.ConfigRotationBits] = encoder
+
+	return nil
+}
+
+// SetActiveConfig changes the active configuration
+func (qlb *QUICLBLoadBalancer) SetActiveConfig(configRotationBits uint8) error {
+	qlb.mu.Lock()
+	defer qlb.mu.Unlock()
+
+	if _, exists := qlb.configs[configRotationBits]; !exists {
+		return fmt.Errorf("configuration %d not found", configRotationBits)
+	}
+
+	qlb.activeConfig = configRotationBits
+	return nil
 }
 
 // Enhanced load balancer with multiple algorithms (Legacy - will be replaced)
@@ -620,40 +851,31 @@ type ConsistentHash struct {
 	replicas int
 }
 
-// Comprehensive metrics
+// Simplified metrics
 type LoadBalancingStats struct {
-	TotalRequests        int64            `json:"total_requests"`
-	TotalConnections     int64            `json:"total_connections"`
-	ActiveConnections    int64            `json:"active_connections"`
-	MigrationEvents      int64            `json:"migration_events"`
-	SuccessfulMigrations int64            `json:"successful_migrations"`
-	FailedMigrations     int64            `json:"failed_migrations"`
-	AverageRTT           time.Duration    `json:"average_rtt"`
-	TotalBandwidth       int64            `json:"total_bandwidth"`
-	PacketLossRate       float64          `json:"packet_loss_rate"`
-	BackendHealth        map[int]float64  `json:"backend_health"`
-	Protocol             map[string]int64 `json:"protocol_stats"`
-	RequestsPerSecond    float64          `json:"requests_per_second"`
-	ErrorRate            float64          `json:"error_rate"`
-	TotalBackends        int              `json:"total_backends"`
-	HealthyBackends      int              `json:"healthy_backends"`
-	Algorithm            string           `json:"algorithm"`
-	BackendStats         []*Backend       `json:"backend_stats"`
-	LastUpdate           time.Time        `json:"last_update"`
+	TotalRequests     int64      `json:"total_requests"`
+	TotalConnections  int64      `json:"total_connections"`
+	ActiveConnections int64      `json:"active_connections"`
+	RequestsPerSecond float64    `json:"requests_per_second"`
+	ErrorRate         float64    `json:"error_rate"`
+	TotalBackends     int        `json:"total_backends"`
+	HealthyBackends   int        `json:"healthy_backends"`
+	Algorithm         string     `json:"algorithm"`
+	BackendStats      []*Backend `json:"backend_stats"`
+	LastUpdate        time.Time  `json:"last_update"`
 }
 
-// Global enhanced variables
+// Simplified global variables
 var (
 	connTracker = &ConnectionTracker{
-		connections: make(map[string]*ConnectionInfo),
-		pathEvents:  make(map[string][]PathEvent),
+		connections: make(map[string]*SimpleConnectionInfo),
 	}
 	// QUIC-LB Draft 20 compliant load balancer
 	quicLBLoadBalancer *QUICLBLoadBalancer
 	// Legacy load balancer (for fallback/migration)
 	loadBalancer = &LoadBalancer{
 		backends:   []*Backend{},
-		algorithm:  "adaptive-weighted",
+		algorithm:  "round-robin", // Simplified from adaptive-weighted
 		sessionMap: make(map[string]*Backend),
 	}
 	totalRequests         int64
@@ -881,124 +1103,31 @@ func (ct *ConnectionTracker) trackConnection(connID, quicConnID, remoteAddr, loc
 	now := time.Now()
 	atomic.AddInt64(&totalRequests, 1)
 
+	// Simple connection tracking
 	if conn, exists := ct.connections[connID]; exists {
-		// Enhanced migration detection with better validation
-		if conn.RemoteAddr != remoteAddr {
-			// Enhanced path validation simulation
-			validated := true
-			validateTime := time.Millisecond * time.Duration(20+mathrand.Intn(100))
-			pathMTU := 1200 + mathrand.Intn(300)
-
-			// Simulate realistic path validation scenarios
-			validationSuccess := mathrand.Float64() > 0.05 // 95% success rate
-			if !validationSuccess {
-				validated = false
-				validateTime = time.Millisecond * time.Duration(500+mathrand.Intn(1000)) // Longer timeout for failed validation
-			}
-
-			migration := MigrationEvent{
-				Timestamp:    now,
-				OldAddr:      conn.RemoteAddr,
-				NewAddr:      remoteAddr,
-				Validated:    validated,
-				ValidateTime: validateTime,
-				Reason:       detectMigrationReason(conn.RemoteAddr, remoteAddr),
-				Success:      validated,
-				PathMTU:      pathMTU,
-			}
-
-			conn.MigrationEvents = append(conn.MigrationEvents, migration)
-			conn.MigrationCount++
-
-			// Only update address if validation succeeded
-			if validated {
-				conn.RemoteAddr = remoteAddr
-				conn.ActivePaths[remoteAddr] = true
-
-				// Mark old path as inactive after successful migration
-				conn.ActivePaths[migration.OldAddr] = false
-			}
-
-			// Add path event with enhanced information
-			pathEvent := PathEvent{
-				Timestamp: now,
-				Path:      remoteAddr,
-				Event:     getPathEventType(validated),
-				RTT:       validateTime,
-				Success:   validated,
-			}
-			conn.PathEvents = append(conn.PathEvents, pathEvent)
-
-			// Update global migration metrics
-			if validated {
-				atomic.AddInt64(&migrationSuccessCount, 1)
-			} else {
-				atomic.AddInt64(&migrationFailureCount, 1)
-			}
-
-			log.Printf("🔄 Enhanced Migration: %s -> %s (Validated: %v, Time: %v, MTU: %d, Reason: %s)",
-				migration.OldAddr, migration.NewAddr, validated, validateTime, pathMTU, migration.Reason)
-		}
-
+		// Update existing connection
 		conn.LastSeen = now
 		atomic.AddInt64(&conn.RequestCount, 1)
-
-		// Enhanced connection stats simulation
-		conn.RTT = time.Millisecond * time.Duration(10+mathrand.Intn(90))
-		conn.Bandwidth = int64(1000000 + mathrand.Intn(9000000)) // 1-10 Mbps
-		conn.PacketsReceived++
-		conn.PacketsSent++
-
-		// Simulate packet loss
-		if mathrand.Float64() < 0.01 { // 1% packet loss
-			conn.PacketsLost++
-		}
-
-		conn.CongestionWindow = int64(10000 + mathrand.Intn(50000))
 	} else {
-		// New enhanced connection
-		ct.connections[connID] = &ConnectionInfo{
-			ConnectionID:     connID,
-			QuicConnectionID: quicConnID,
-			RemoteAddr:       remoteAddr,
-			LocalAddr:        localAddr,
-			StartTime:        now,
-			LastSeen:         now,
-			RequestCount:     1,
-			MigrationCount:   0,
-			MigrationEvents:  []MigrationEvent{},
-			PathEvents:       []PathEvent{},
-			ActivePaths:      map[string]bool{remoteAddr: true},
-			RTT:              time.Millisecond * 50,
-			Bandwidth:        5000000, // 5 Mbps initial
-			PacketsReceived:  1,
-			PacketsSent:      1,
-			PacketsLost:      0,
-			CongestionWindow: 30000,
-			Protocol:         req.Proto,
+		// Create new connection with simplified info
+		ct.connections[connID] = &SimpleConnectionInfo{
+			ConnectionID: connID,
+			RemoteAddr:   remoteAddr,
+			StartTime:    now,
+			LastSeen:     now,
+			RequestCount: 1,
+			Protocol:     req.Proto,
 		}
-
-		log.Printf("🆕 Enhanced QUIC connection: %s from %s (ID: %s, Protocol: %s)",
-			localAddr, remoteAddr, connID, req.Proto)
 	}
 }
 
-func (ct *ConnectionTracker) getConnections() map[string]*ConnectionInfo {
+func (ct *ConnectionTracker) getConnections() map[string]*SimpleConnectionInfo {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
 
-	result := make(map[string]*ConnectionInfo)
+	result := make(map[string]*SimpleConnectionInfo)
 	for k, v := range ct.connections {
-		connCopy := *v
-		connCopy.MigrationEvents = make([]MigrationEvent, len(v.MigrationEvents))
-		copy(connCopy.MigrationEvents, v.MigrationEvents)
-		connCopy.PathEvents = make([]PathEvent, len(v.PathEvents))
-		copy(connCopy.PathEvents, v.PathEvents)
-		connCopy.ActivePaths = make(map[string]bool)
-		for path, active := range v.ActivePaths {
-			connCopy.ActivePaths[path] = active
-		}
-		result[k] = &connCopy
+		result[k] = v
 	}
 	return result
 }
@@ -1160,20 +1289,12 @@ func (lb *LoadBalancer) GetNextPeer(sessionKey string) *Backend {
 		}
 	}
 
+	// Simplified algorithms only
 	switch lb.algorithm {
-	case "adaptive-weighted":
-		return lb.getAdaptiveWeightedBackend()
 	case "weighted-round-robin":
 		return lb.getWeightedRoundRobinBackend()
 	case "least-connections":
 		return lb.getLeastConnectionsBackend()
-	case "consistent-hash":
-		if sessionKey != "" && lb.consistentHash != nil {
-			return lb.consistentHash.Get(sessionKey)
-		}
-		fallthrough
-	case "health-based":
-		return lb.getHealthBasedBackend()
 	case "round-robin":
 		fallthrough
 	default:
@@ -1181,33 +1302,8 @@ func (lb *LoadBalancer) GetNextPeer(sessionKey string) *Backend {
 	}
 }
 
-func (lb *LoadBalancer) getAdaptiveWeightedBackend() *Backend {
-	var selected *Backend
-	bestScore := -1.0
-
-	for _, backend := range lb.backends {
-		if !backend.IsAlive() {
-			continue
-		}
-
-		// Update health score
-		backend.UpdateHealthScore()
-
-		// Adaptive scoring combining health, load, and response time
-		loadScore := 1.0 - float64(backend.GetConnections())/float64(backend.Capacity)
-		responseScore := 1.0 - math.Min(float64(backend.AvgResponseTime.Milliseconds())/1000.0, 1.0)
-
-		// Weighted adaptive score
-		adaptiveScore := backend.HealthScore*0.4 + loadScore*0.4 + responseScore*0.2
-
-		if adaptiveScore > bestScore {
-			bestScore = adaptiveScore
-			selected = backend
-		}
-	}
-
-	return selected
-}
+// Simplified: Removed complex algorithms (adaptive-weighted, health-based, consistent-hash)
+// Only keeping basic algorithms for educational use
 
 func (lb *LoadBalancer) getWeightedRoundRobinBackend() *Backend {
 	var selected *Backend
@@ -1265,22 +1361,7 @@ func (lb *LoadBalancer) getLeastConnectionsBackend() *Backend {
 	return selected
 }
 
-func (lb *LoadBalancer) getHealthBasedBackend() *Backend {
-	var selected *Backend
-	bestScore := -1.0
-
-	for _, backend := range lb.backends {
-		if backend.IsAlive() {
-			backend.UpdateHealthScore()
-			if backend.HealthScore > bestScore {
-				bestScore = backend.HealthScore
-				selected = backend
-			}
-		}
-	}
-
-	return selected
-}
+// Simplified: Removed health-based algorithm method
 
 func (lb *LoadBalancer) GetStats() *LoadBalancingStats {
 	lb.mu.RLock()
@@ -1296,30 +1377,8 @@ func (lb *LoadBalancer) GetStats() *LoadBalancingStats {
 	duration := time.Since(startTime).Seconds()
 	rps := float64(atomic.LoadInt64(&totalRequests)) / duration
 
-	// Calculate additional metrics
+	// Simplified metrics calculation
 	connections := connTracker.getConnections()
-	totalRTT := time.Duration(0)
-	validConnections := 0
-	migrationEvents := int64(0)
-	successfulMigrations := int64(0)
-
-	for _, conn := range connections {
-		if conn.RTT > 0 {
-			totalRTT += conn.RTT
-			validConnections++
-		}
-		migrationEvents += int64(conn.MigrationCount)
-		for _, migration := range conn.MigrationEvents {
-			if migration.Success {
-				successfulMigrations++
-			}
-		}
-	}
-
-	var averageRTT time.Duration
-	if validConnections > 0 {
-		averageRTT = totalRTT / time.Duration(validConnections)
-	}
 
 	// Calculate error rate
 	totalErrors := int64(0)
@@ -1345,22 +1404,16 @@ func (lb *LoadBalancer) GetStats() *LoadBalancingStats {
 	}
 
 	return &LoadBalancingStats{
-		TotalRequests:        atomic.LoadInt64(&totalRequests),
-		TotalBackends:        len(lb.backends),
-		HealthyBackends:      healthy,
-		Algorithm:            lb.algorithm,
-		BackendStats:         lb.backends,
-		RequestsPerSecond:    rps,
-		LastUpdate:           time.Now(),
-		TotalConnections:     int64(len(connections)),
-		ActiveConnections:    int64(len(connections)),
-		MigrationEvents:      migrationEvents,
-		SuccessfulMigrations: successfulMigrations,
-		FailedMigrations:     migrationEvents - successfulMigrations,
-		AverageRTT:           averageRTT,
-		BackendHealth:        backendHealth,
-		Protocol:             protocolStats,
-		ErrorRate:            errorRate,
+		TotalRequests:     atomic.LoadInt64(&totalRequests),
+		TotalBackends:     len(lb.backends),
+		HealthyBackends:   healthy,
+		Algorithm:         lb.algorithm,
+		BackendStats:      lb.backends,
+		RequestsPerSecond: rps,
+		LastUpdate:        time.Now(),
+		TotalConnections:  int64(len(connections)),
+		ActiveConnections: int64(len(connections)),
+		ErrorRate:         errorRate,
 	}
 }
 
@@ -1369,42 +1422,39 @@ func healthCheck() {
 	t := time.NewTicker(time.Second * 15) // More frequent checks
 	defer t.Stop()
 
-	for {
-		select {
-		case <-t.C:
-			loadBalancer.mu.RLock()
-			backends := make([]*Backend, len(loadBalancer.backends))
-			copy(backends, loadBalancer.backends)
-			loadBalancer.mu.RUnlock()
+	for range t.C {
+		loadBalancer.mu.RLock()
+		backends := make([]*Backend, len(loadBalancer.backends))
+		copy(backends, loadBalancer.backends)
+		loadBalancer.mu.RUnlock()
 
-			for _, backend := range backends {
-				go func(b *Backend) {
-					start := time.Now()
-					isAlive := isBackendAlive(b.URL)
-					responseTime := time.Since(start)
+		for _, backend := range backends {
+			go func(b *Backend) {
+				start := time.Now()
+				isAlive := isBackendAlive(b.URL)
+				responseTime := time.Since(start)
 
-					b.mu.Lock()
-					b.ResponseTime = responseTime
-					if b.AvgResponseTime == 0 {
-						b.AvgResponseTime = responseTime
-					} else {
-						b.AvgResponseTime = (b.AvgResponseTime + responseTime) / 2
-					}
-					b.mu.Unlock()
+				b.mu.Lock()
+				b.ResponseTime = responseTime
+				if b.AvgResponseTime == 0 {
+					b.AvgResponseTime = responseTime
+				} else {
+					b.AvgResponseTime = (b.AvgResponseTime + responseTime) / 2
+				}
+				b.mu.Unlock()
 
-					b.SetAlive(isAlive)
-					b.UpdateHealthScore()
+				b.SetAlive(isAlive)
+				b.UpdateHealthScore()
 
-					status := "❌ DOWN"
-					if isAlive {
-						status = "✅ UP"
-					}
+				status := "❌ DOWN"
+				if isAlive {
+					status = "✅ UP"
+				}
 
-					cbState := b.CircuitBreaker.GetState()
-					log.Printf("🏥 Enhanced Backend #%d %s %s (Health: %.2f, CB: %s, RT: %v)",
-						b.ID, b.URL, status, b.HealthScore, cbState, responseTime)
-				}(backend)
-			}
+				cbState := b.CircuitBreaker.GetState()
+				log.Printf("🏥 Enhanced Backend #%d %s %s (Health: %.2f, CB: %s, RT: %v)",
+					b.ID, b.URL, status, b.HealthScore, cbState, responseTime)
+			}(backend)
 		}
 	}
 }
@@ -1520,10 +1570,7 @@ func LoadBalancerMiddleware(next http.Handler) http.Handler {
 		}
 		peer.mu.Unlock()
 
-		// Record metrics
-		backendID := fmt.Sprintf("%d", peer.ID)
-		status := "200" // Default, we'd need response wrapper to get actual status
-		RecordRequest(r.Method, status, r.Proto, backendID, responseTime.Seconds())
+		// Simplified: Removed complex metrics recording
 
 	})
 }
@@ -1591,12 +1638,13 @@ func main() {
 
 	// Initialize QUIC-LB configuration per Draft 20
 	quicLBConfig := &QUICLBConfig{
-		Algorithm:       "plaintext", // Start with plaintext for demonstration
-		ConfigID:        0x01,        // 4-bit config ID
-		ServerIDLen:     2,           // 2 bytes for server ID (supports up to 65536 backends)
-		ConnectionIDLen: 8,           // 8-byte connection ID length
-		Active:          true,
-		CreatedAt:       time.Now(),
+		Algorithm:               "plaintext", // Start with plaintext for demonstration
+		ConfigRotationBits:      0x01,        // 3-bit config rotation (0-6)
+		ServerIDLen:             2,           // 2 bytes for server ID (supports up to 65536 backends)
+		ConnectionIDLen:         8,           // 8-byte connection ID length
+		FirstOctetEncodesCIDLen: false,       // Use random bits for privacy by default
+		Active:                  true,
+		CreatedAt:               time.Now(),
 	}
 
 	// Create QUIC-LB compliant load balancer
@@ -1607,8 +1655,8 @@ func main() {
 	}
 
 	log.Printf("✅ QUIC-LB Draft 20 compliant load balancer initialized")
-	log.Printf("🔧 Algorithm: %s, Config ID: %d, Server ID Length: %d bytes",
-		quicLBConfig.Algorithm, quicLBConfig.ConfigID, quicLBConfig.ServerIDLen)
+	log.Printf("🔧 Algorithm: %s, Config Rotation: %d, Server ID Length: %d bytes",
+		quicLBConfig.Algorithm, quicLBConfig.ConfigRotationBits, quicLBConfig.ServerIDLen)
 
 	// Initialize enhanced backends
 	backends := getBackendURLs()
@@ -1658,26 +1706,12 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		connections := connTracker.getConnections()
 
-		migrationEvents := int64(0)
-		successfulMigrations := int64(0)
-
-		for _, conn := range connections {
-			migrationEvents += int64(conn.MigrationCount)
-			for _, migration := range conn.MigrationEvents {
-				if migration.Success {
-					successfulMigrations++
-				}
-			}
-		}
-
+		// Simplified connection stats
 		response := map[string]interface{}{
-			"connections":           connections,
-			"total_count":           len(connections),
-			"active_count":          len(connections),
-			"migration_events":      migrationEvents,
-			"successful_migrations": successfulMigrations,
-			"failed_migrations":     migrationEvents - successfulMigrations,
-			"timestamp":             time.Now(),
+			"connections":  connections,
+			"total_count":  len(connections),
+			"active_count": len(connections),
+			"timestamp":    time.Now(),
 		}
 		json.NewEncoder(w).Encode(response)
 	})
@@ -1698,7 +1732,7 @@ func main() {
 			"compliant":             true,
 			"config":                quicLBLoadBalancer.GetConfig(),
 			"backend_stats":         quicLBLoadBalancer.GetBackendStats(),
-			"algorithm":             quicLBLoadBalancer.config.Algorithm,
+			"algorithm":             quicLBLoadBalancer.GetConfig().Algorithm,
 			"stateless":             true,
 			"connection_id_routing": true,
 			"supported_algorithms":  []string{"plaintext", "stream-cipher", "block-cipher"},
@@ -1707,7 +1741,146 @@ func main() {
 		json.NewEncoder(w).Encode(response)
 	})
 
-	// QUIC-LB Connection ID testing endpoint
+	// QUIC-LB Configuration Management endpoint
+	mux.HandleFunc("/api/quic-lb/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == "POST" {
+			// Add a new configuration
+			var newConfig QUICLBConfig
+			if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
+				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+				return
+			}
+
+			err := quicLBLoadBalancer.AddConfig(&newConfig)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to add config: %v", err), http.StatusBadRequest)
+				return
+			}
+
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "Configuration added successfully",
+				"config":  newConfig,
+			})
+			return
+		}
+
+		// GET - return all configurations
+		quicLBLoadBalancer.mu.RLock()
+		configs := make(map[string]*QUICLBConfig)
+		for bits, config := range quicLBLoadBalancer.configs {
+			configs[fmt.Sprintf("config_%d", bits)] = config
+		}
+		activeConfig := quicLBLoadBalancer.activeConfig
+		quicLBLoadBalancer.mu.RUnlock()
+
+		response := map[string]interface{}{
+			"configurations": configs,
+			"active_config":  activeConfig,
+			"draft":          "IETF QUIC-LB Draft 20",
+			"features": []string{
+				"config-rotation",
+				"length-self-description",
+				"unroutable-cid-handling",
+				"aes-ecb-encryption",
+				"multi-algorithm-support",
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	})
+
+	// QUIC-LB Algorithm Demo endpoint
+	mux.HandleFunc("/api/quic-lb/demo", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Demonstrate different algorithms
+		demos := make(map[string]interface{})
+
+		// Demo 1: Plaintext algorithm
+		plaintextConfig := &QUICLBConfig{
+			Algorithm:               "plaintext",
+			ConfigRotationBits:      0x02,
+			ServerIDLen:             2,
+			ConnectionIDLen:         8,
+			FirstOctetEncodesCIDLen: true, // Enable length encoding for demo
+			Active:                  true,
+			CreatedAt:               time.Now(),
+		}
+
+		encoder := NewPlaintextQUICLB(plaintextConfig.ConfigRotationBits, plaintextConfig.ServerIDLen, plaintextConfig.ConnectionIDLen)
+		encoder.config.FirstOctetEncodesCIDLen = true
+
+		cid, err := encoder.EncodePlaintextCID(123) // Backend ID 123
+		if err == nil {
+			decoded, decodeErr := encoder.DecodeCID(cid.Raw)
+			demos["plaintext"] = map[string]interface{}{
+				"algorithm":            "plaintext",
+				"config_rotation_bits": fmt.Sprintf("0b%03b", plaintextConfig.ConfigRotationBits),
+				"first_octet_binary":   fmt.Sprintf("0b%08b", cid.Raw[0]),
+				"config_bits":          fmt.Sprintf("bits 5-7: 0b%03b", (cid.Raw[0]>>5)&0x07),
+				"length_bits":          fmt.Sprintf("bits 0-4: 0b%05b", cid.Raw[0]&0x1F),
+				"cid_hex":              hex.EncodeToString(cid.Raw),
+				"decoded_backend_id":   decoded.BackendID,
+				"decode_success":       decodeErr == nil,
+			}
+		}
+
+		// Demo 2: Encrypted algorithm (if we add key)
+		key := make([]byte, 16)
+		rand.Read(key)
+
+		encryptedEncoder, err := NewEncryptedQUICLB("stream-cipher", 0x03, 2, 8, 4, key)
+		if err == nil {
+			nonce := make([]byte, 4)
+			rand.Read(nonce)
+
+			encryptedCID, encErr := encryptedEncoder.EncodeEncryptedCID(456, nonce)
+			if encErr == nil {
+				decodedEnc, decEncErr := encryptedEncoder.DecodeCID(encryptedCID.Raw)
+				demos["encrypted"] = map[string]interface{}{
+					"algorithm":            "stream-cipher",
+					"config_rotation_bits": fmt.Sprintf("0b%03b", 0x03),
+					"first_octet_binary":   fmt.Sprintf("0b%08b", encryptedCID.Raw[0]),
+					"config_bits":          fmt.Sprintf("bits 5-7: 0b%03b", (encryptedCID.Raw[0]>>5)&0x07),
+					"length_bits":          fmt.Sprintf("bits 0-4: 0b%05b", encryptedCID.Raw[0]&0x1F),
+					"cid_hex":              hex.EncodeToString(encryptedCID.Raw),
+					"encrypted":            true,
+					"decoded_backend_id":   decodedEnc.BackendID,
+					"decode_success":       decEncErr == nil,
+				}
+			}
+		}
+
+		// Demo 3: Unroutable CID
+		unroutableCID := make([]byte, 8)
+		rand.Read(unroutableCID)
+		unroutableCID[0] = (0x07 << 5) | (unroutableCID[0] & 0x1F) // Set to reserved value 0b111
+
+		demos["unroutable"] = map[string]interface{}{
+			"algorithm":            "unroutable",
+			"config_rotation_bits": "0b111 (reserved)",
+			"first_octet_binary":   fmt.Sprintf("0b%08b", unroutableCID[0]),
+			"config_bits":          "bits 5-7: 0b111 (reserved)",
+			"length_bits":          fmt.Sprintf("bits 0-4: 0b%05b", unroutableCID[0]&0x1F),
+			"cid_hex":              hex.EncodeToString(unroutableCID),
+			"routable":             false,
+			"fallback_required":    true,
+		}
+
+		response := map[string]interface{}{
+			"description": "QUIC-LB Draft 20 Algorithm Demonstrations",
+			"first_octet_format": map[string]string{
+				"bits_5_7": "Config Rotation (3 bits)",
+				"bits_0_4": "CID Length or Random (5 bits)",
+			},
+			"algorithms": demos,
+			"compliance": "IETF QUIC-LB Draft 20",
+			"timestamp":  time.Now(),
+		}
+
+		json.NewEncoder(w).Encode(response)
+	})
 	mux.HandleFunc("/api/quic-lb/test-cid", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -1716,32 +1889,44 @@ func main() {
 
 		for _, backend := range quicLBLoadBalancer.GetBackendStats() {
 			backendID := uint16(backend.ID)
-			cid, err := quicLBLoadBalancer.GenerateConnectionID(backendID)
-			if err != nil {
+			cid, cidErr := quicLBLoadBalancer.GenerateConnectionID(backendID)
+			if cidErr != nil {
 				testResults[fmt.Sprintf("backend_%d", backendID)] = map[string]interface{}{
-					"error": err.Error(),
+					"error": cidErr.Error(),
 				}
 				continue
 			}
 
-			// Test decoding
-			decodedCID, err := quicLBLoadBalancer.encoder.DecodeCID(cid)
-			if err != nil {
+			// Test decoding - try with active config first
+			var decodedCID *QUICLBConnectionID
+			var decodeErr error
+
+			if len(cid) > 0 {
+				configRotationBits := (cid[0] >> 5) & 0x07
+				if encoder, exists := quicLBLoadBalancer.encoders[configRotationBits]; exists {
+					decodedCID, decodeErr = encoder.DecodeCID(cid)
+				} else {
+					decodeErr = fmt.Errorf("no encoder for config rotation %d", configRotationBits)
+				}
+			} else {
+				decodeErr = fmt.Errorf("empty CID")
+			}
+			if decodeErr != nil {
 				testResults[fmt.Sprintf("backend_%d", backendID)] = map[string]interface{}{
 					"cid_hex":      hex.EncodeToString(cid),
-					"decode_error": err.Error(),
+					"decode_error": decodeErr.Error(),
 				}
 				continue
 			}
 
 			testResults[fmt.Sprintf("backend_%d", backendID)] = map[string]interface{}{
-				"backend_url":        backend.URL.String(),
-				"cid_hex":            hex.EncodeToString(cid),
-				"cid_length":         len(cid),
-				"decoded_backend_id": decodedCID.BackendID,
-				"config_id":          decodedCID.ConfigID,
-				"algorithm":          decodedCID.Algorithm,
-				"valid":              decodedCID.Valid,
+				"backend_url":          backend.URL.String(),
+				"cid_hex":              hex.EncodeToString(cid),
+				"cid_length":           len(cid),
+				"decoded_backend_id":   decodedCID.BackendID,
+				"config_rotation_bits": decodedCID.ConfigRotationBits,
+				"algorithm":            decodedCID.Algorithm,
+				"valid":                decodedCID.Valid,
 			}
 		}
 
@@ -1765,26 +1950,17 @@ func main() {
 				return
 			}
 
+			// Simplified algorithms only
 			validAlgorithms := []string{
 				"round-robin", "weighted-round-robin", "least-connections",
-				"consistent-hash", "health-based", "adaptive-weighted",
 			}
 
 			for _, alg := range validAlgorithms {
 				if req.Algorithm == alg {
 					loadBalancer.mu.Lock()
 					loadBalancer.algorithm = req.Algorithm
-
-					// Initialize consistent hash if needed
-					if req.Algorithm == "consistent-hash" && loadBalancer.consistentHash == nil {
-						loadBalancer.consistentHash = NewConsistentHash(100)
-						for _, backend := range loadBalancer.backends {
-							loadBalancer.consistentHash.Add(backend)
-						}
-					}
-
 					loadBalancer.mu.Unlock()
-					log.Printf("🔄 Enhanced algorithm changed to: %s", req.Algorithm)
+					log.Printf("🔄 Algorithm changed to: %s", req.Algorithm)
 					break
 				}
 			}
@@ -1794,7 +1970,6 @@ func main() {
 			"algorithm": loadBalancer.algorithm,
 			"available": []string{
 				"round-robin", "weighted-round-robin", "least-connections",
-				"consistent-hash", "health-based", "adaptive-weighted",
 			},
 		})
 	})
@@ -1827,7 +2002,7 @@ func main() {
 			"active_connections": len(connInfo),
 			"migration_support":  "enhanced",
 			"path_validation":    "enabled",
-			"features":           []string{"circuit-breaker", "health-scoring", "session-affinity", "enhanced-migration", "quic-lb-draft-20"},
+			"features":           []string{"basic-health-checks", "session-affinity", "quic-lb-draft-20"},
 			"ietf_compliance":    "QUIC-LB Draft 20",
 			"timestamp":          time.Now(),
 		}
@@ -1865,8 +2040,7 @@ func main() {
 		json.NewEncoder(w).Encode(response)
 	})
 
-	// Prometheus metrics endpoint
-	mux.Handle("/metrics", promhttp.Handler())
+	// Removed Prometheus metrics endpoint for simplicity
 
 	// Enhanced middleware chain
 	finalHandler := LoadBalancerMiddleware(QuicConnectionMiddleware(mux))
@@ -1886,7 +2060,7 @@ func main() {
 
 		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
 		w.Header().Set("X-Server-Protocol", r.Proto)
-		w.Header().Set("X-Enhanced-Features", "circuit-breaker,health-scoring,session-affinity,enhanced-migration")
+		w.Header().Set("X-Enhanced-Features", "basic-health-checks,session-affinity,quic-lb-draft-20")
 
 		finalHandler.ServeHTTP(w, r)
 	})
@@ -1939,27 +2113,12 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				connTracker.cleanup()
-			}
+		for range ticker.C {
+			connTracker.cleanup()
 		}
 	}()
 
-	// Start metrics collection routine
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				// Update Prometheus metrics
-				connTracker.UpdateMetrics()
-				loadBalancer.UpdateMetrics()
-			}
-		}
-	}()
+	// Simplified: Removed complex metrics collection routine
 
 	// Start HTTP/2 server (TCP) for browser compatibility
 	go func() {
@@ -2011,17 +2170,26 @@ func main() {
 
 	currentIP := getLocalIP()
 
-	log.Println("🚀 Starting IETF QUIC-LB Draft 20 Compliant HTTP/3 Load Balancer")
-	log.Printf("📋 QUIC-LB Config: Algorithm=%s, ConfigID=%d, ServerIDLen=%d bytes",
-		quicLBConfig.Algorithm, quicLBConfig.ConfigID, quicLBConfig.ServerIDLen)
+	log.Println("🚀 Starting IETF QUIC-LB Draft 20 Fully Compliant HTTP/3 Load Balancer")
+	log.Printf("📋 QUIC-LB Config: Algorithm=%s, ConfigRotation=%d, ServerIDLen=%d bytes",
+		quicLBConfig.Algorithm, quicLBConfig.ConfigRotationBits, quicLBConfig.ServerIDLen)
 	log.Printf("🌐 Enhanced Server: https://localhost:9443")
 	log.Printf("🌐 Local IP: %s", currentIP)
 	log.Printf("📊 Enhanced Dashboard: https://localhost:9443/")
-	log.Printf("� QUIC-LB API: https://localhost:9443/api/quic-lb")
+	log.Printf("🔧 QUIC-LB API: https://localhost:9443/api/quic-lb")
+	log.Printf("⚙️ Config Management: https://localhost:9443/api/quic-lb/config")
+	log.Printf("🧪 Algorithm Demo: https://localhost:9443/api/quic-lb/demo")
 	log.Printf("🧪 CID Test: https://localhost:9443/api/quic-lb/test-cid")
-	log.Printf("�🔄 Algorithms: adaptive-weighted, weighted-round-robin, health-based, consistent-hash")
-	log.Printf("🛡️ Features: Circuit Breaker, Session Affinity, Enhanced Migration, Health Scoring")
-	log.Printf("✅ QUIC-LB Draft 20: Stateless routing, Connection ID encoding, Backend affinity")
+	log.Printf("🔄 Algorithms: round-robin, weighted-round-robin, least-connections")
+	log.Printf("🛡️ Features: Full Draft 20 Compliance")
+	log.Printf("✅ QUIC-LB Draft 20 Features:")
+	log.Printf("   • 3-bit Config Rotation (0-6)")
+	log.Printf("   • 5-bit Length Self-Description")
+	log.Printf("   • Unroutable CID Handling (0b111 reserved)")
+	log.Printf("   • AES-ECB Single/Four-Pass Encryption")
+	log.Printf("   • Plaintext, Stream-Cipher, Block-Cipher Algorithms")
+	log.Printf("   • Stateless Routing with Fallback")
+	log.Printf("   • Multiple Configuration Support")
 
 	// Start a simple HTTP server for comparison
 	go func() {

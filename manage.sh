@@ -29,7 +29,7 @@ print_banner() {
 print_status() {
     echo -e "${GREEN}✅ $1${NC}"
 }
-
+~
 print_info() {
     echo -e "${BLUE}ℹ️  $1${NC}"
 }
@@ -39,7 +39,7 @@ print_warning() {
 }
 
 print_error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}❌ $1${NC}"~
 }
 
 # Function to check if Docker is running
@@ -48,196 +48,201 @@ check_docker() {
         print_error "Docker is not running. Please start Docker first."
         exit 1
     fi
-    print_status "Docker is running"
 }
 
 # Function to check if docker-compose is available
 check_docker_compose() {
-    if ! command -v docker-compose >/dev/null 2>&1; then
-        if ! docker compose version >/dev/null 2>&1; then
-            print_error "Docker Compose is not available. Please install Docker Compose."
-            exit 1
-        else
-            DOCKER_COMPOSE_CMD="docker compose"
-        fi
-    else
-        DOCKER_COMPOSE_CMD="docker-compose"
+    if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+        print_error "Docker Compose is not available. Please install Docker Compose."
+        exit 1
     fi
-    print_status "Docker Compose is available"
 }
 
-# Function to build and start all services
-start_services() {
-    print_info "Building and starting QUIC infrastructure..."
-    
-    # Build the main application
-    print_info "Building QUIC server image..."
-    $DOCKER_COMPOSE_CMD build quic-server
-    
-    # Start all services
-    print_info "Starting all services..."
-    $DOCKER_COMPOSE_CMD up -d
-    
-    print_status "All services started successfully!"
-    
-    # Wait a moment for services to initialize
-    sleep 5
-    
-    # Show service status
-    show_status
-}
-
-# Function to stop all services
-stop_services() {
-    print_info "Stopping all services..."
-    $DOCKER_COMPOSE_CMD down
-    print_status "All services stopped"
-}
-
-# Function to show service status
-show_status() {
-    echo
-    print_info "Service Status:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    # Check each service
-    services=("quic-server" "quic-backend1" "quic-backend2" "quic-backend3" "quic-prometheus" "quic-grafana")
-    
-    for service in "${services[@]}"; do
-        if docker ps --format "table {{.Names}}" | grep -q "^${service}$"; then
-            print_status "$service is running"
-        else
-            print_error "$service is not running"
-        fi
-    done
-    
-    echo
-    print_info "Service URLs:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 QUIC Server (HTTP/3):     https://localhost:9443"
-    echo "🌐 HTTP Server (fallback):   http://localhost:8080"
-    echo "📊 Prometheus:               http://localhost:9090"
-    echo "📈 Grafana:                  http://localhost:3000 (admin/admin123)"
-    echo "🔧 Backend 1:                http://localhost:8081"
-    echo "🔧 Backend 2:                http://localhost:8082"
-    echo "🔧 Backend 3:                http://localhost:8083"
-    echo
-    print_info "API Endpoints:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔗 Connections:              https://localhost:9443/api/connections"
-    echo "⚖️  Load Balancer:            https://localhost:9443/api/loadbalancer"
-    echo "🧪 Test Endpoint:             https://localhost:9443/api/test"
-    echo "🔄 Migration Simulation:      https://localhost:9443/api/simulate-migration"
-    echo "📊 Prometheus Metrics:        https://localhost:9443/metrics"
-    echo "🚀 QUIC-LB Status:            https://localhost:9443/api/quic-lb"
-    echo "🧪 QUIC-LB CID Test:          https://localhost:9443/api/quic-lb/test-cid"
-    echo
-    print_info "IETF QUIC-LB Draft 20 Features:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Stateless load balancing"
-    echo "✅ Connection ID routing"
-    echo "✅ Backend affinity preservation"
-    echo "✅ Plaintext/Stream/Block cipher algorithms"
-    echo "✅ Draft 20 compliant encoding/decoding"
-    echo
-}
-
-# Function to show logs
-show_logs() {
-    local service=${1:-""}
-    
-    if [ -z "$service" ]; then
-        print_info "Showing logs for all services..."
-        $DOCKER_COMPOSE_CMD logs -f
+# Function to get docker-compose command
+get_compose_cmd() {
+    if command -v docker-compose >/dev/null 2>&1; then
+        echo "docker-compose"
     else
-        print_info "Showing logs for $service..."
-        $DOCKER_COMPOSE_CMD logs -f "$service"
+        echo "docker compose"
     fi
+}
+
+# Function to build the application
+build() {
+    print_info "Building QUIC Load Balancer Docker images..."
+    
+    local compose_cmd=$(get_compose_cmd)
+    $compose_cmd -f $COMPOSE_FILE build --no-cache
+    
+    print_status "Build completed successfully!"
+}
+
+# Function to start services
+start() {
+    print_info "Starting QUIC infrastructure..."
+    
+    local compose_cmd=$(get_compose_cmd)
+    $compose_cmd -f $COMPOSE_FILE up -d
+    
+    print_status "Services started successfully!"
+    print_info "Services available at:"
+    echo "  🌐 QUIC Load Balancer: https://localhost:9443"
+    echo "  📊 Prometheus: http://localhost:9090"
+    echo "  📈 Grafana: http://localhost:3000 (admin/admin)"
+    echo "  📋 Node Exporter: http://localhost:9100"
+}
+
+# Function to stop services
+stop() {
+    print_info "Stopping QUIC infrastructure..."
+    
+    local compose_cmd=$(get_compose_cmd)
+    $compose_cmd -f $COMPOSE_FILE down
+    
+    print_status "Services stopped successfully!"
 }
 
 # Function to restart services
-restart_services() {
-    print_info "Restarting services..."
-    $DOCKER_COMPOSE_CMD restart
-    print_status "Services restarted"
-    show_status
+restart() {
+    print_info "Restarting QUIC infrastructure..."
+    stop
+    start
+    print_status "Services restarted successfully!"
+}
+
+# Function to show logs
+logs() {
+    local service=${1:-}
+    local compose_cmd=$(get_compose_cmd)
+    
+    if [ -z "$service" ]; then
+        $compose_cmd -f $COMPOSE_FILE logs -f
+    else
+        $compose_cmd -f $COMPOSE_FILE logs -f "$service"
+    fi
+}
+
+# Function to show status
+status() {
+    print_info "Checking service status..."
+    
+    local compose_cmd=$(get_compose_cmd)
+    $compose_cmd -f $COMPOSE_FILE ps
+}
+
+# Function to run performance tests
+test_performance() {
+    print_info "Running performance tests..."
+    
+    # Check if the test script exists
+    if [ ! -f "./test_quic_performance.sh" ]; then
+        print_error "Performance test script not found!"
+        exit 1
+    fi
+    
+    # Make sure the script is executable
+    chmod +x ./test_quic_performance.sh
+    
+    # Run the test
+    ./test_quic_performance.sh
 }
 
 # Function to clean up everything
 cleanup() {
-    print_warning "This will remove all containers, networks, and volumes!"
-    read -p "Are you sure? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_info "Cleaning up everything..."
-        $DOCKER_COMPOSE_CMD down -v --remove-orphans
-        docker system prune -f
-        print_status "Cleanup completed"
+    print_warning "This will remove all containers, volumes, and images. Are you sure? (y/N)"
+    read -r response
+    
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        print_info "Cleaning up QUIC infrastructure..."
+        
+        local compose_cmd=$(get_compose_cmd)
+        $compose_cmd -f $COMPOSE_FILE down -v --rmi all
+        
+        # Remove any dangling containers and images
+        docker container prune -f
+        docker image prune -f
+        docker volume prune -f
+        
+        print_status "Cleanup completed!"
     else
-        print_info "Cleanup cancelled"
+        print_info "Cleanup cancelled."
     fi
 }
 
-# Function to run performance tests
-run_tests() {
-    print_info "Running QUIC performance tests..."
+# Function to show health status
+health() {
+    print_info "Checking service health..."
     
-    # Check if server is running
-    if ! docker ps --format "table {{.Names}}" | grep -q "^quic-server$"; then
-        print_error "QUIC server is not running. Please start services first."
-        exit 1
+    echo "🔍 QUIC Server Health:"
+    curl -k -s https://localhost:9443/health || echo "❌ QUIC server not responding"
+    
+    echo "🔍 Backend Services Health:"
+    for port in 8081 8082 8083; do
+        response=$(curl -s http://localhost:$port/ || echo "failed")
+        if [[ "$response" == "failed" ]]; then
+            echo "❌ Backend on port $port not responding"
+        else
+            echo "✅ Backend on port $port is healthy"
+        fi
+    done
+    
+    echo "🔍 Monitoring Health:"
+    prometheus_status=$(curl -s http://localhost:9090/-/healthy || echo "failed")
+    if [[ "$prometheus_status" == "Prometheus is Healthy." ]]; then
+        echo "✅ Prometheus is healthy"
+    else
+        echo "❌ Prometheus not responding"
     fi
     
-    # Run the performance test script
-    if [ -f "./test_quic_performance.sh" ]; then
-        chmod +x ./test_quic_performance.sh
-        ./test_quic_performance.sh
+    grafana_status=$(curl -s http://localhost:3000/api/health || echo "failed")
+    if [[ "$grafana_status" =~ "ok" ]]; then
+        echo "✅ Grafana is healthy"
     else
-        print_error "Performance test script not found"
+        echo "❌ Grafana not responding"
     fi
 }
 
-# Function to open dashboards
-open_dashboards() {
-    print_info "Opening monitoring dashboards..."
+# Function to update services
+update() {
+    print_info "Updating QUIC infrastructure..."
     
-    # Check if services are running
-    if ! docker ps --format "table {{.Names}}" | grep -q "^quic-grafana$"; then
-        print_error "Grafana is not running. Please start services first."
-        exit 1
-    fi
+    local compose_cmd=$(get_compose_cmd)
     
-    # Open dashboards in browser (if available)
-    if command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "http://localhost:3000" >/dev/null 2>&1 &
-        xdg-open "http://localhost:9090" >/dev/null 2>&1 &
-        print_status "Dashboards opened in browser"
-    elif command -v open >/dev/null 2>&1; then
-        open "http://localhost:3000" >/dev/null 2>&1 &
-        open "http://localhost:9090" >/dev/null 2>&1 &
-        print_status "Dashboards opened in browser"
-    else
-        print_info "Please open the following URLs manually:"
-        echo "  📈 Grafana: http://localhost:3000"
-        echo "  📊 Prometheus: http://localhost:9090"
-    fi
+    # Pull latest images
+    $compose_cmd -f $COMPOSE_FILE pull
+    
+    # Rebuild our custom image
+    $compose_cmd -f $COMPOSE_FILE build --no-cache quic-server
+    
+    # Restart with new images
+    $compose_cmd -f $COMPOSE_FILE up -d
+    
+    print_status "Update completed!"
 }
 
-# Main menu
-show_menu() {
-    echo
-    print_info "Available commands:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 start      - Build and start all services"
-    echo "🛑 stop       - Stop all services"
-    echo "🔄 restart    - Restart all services"
-    echo "📊 status     - Show service status and URLs"
-    echo "📝 logs       - Show logs (add service name for specific logs)"
-    echo "🧪 test       - Run performance tests"
-    echo "📈 dashboard  - Open monitoring dashboards"
-    echo "🧹 cleanup    - Remove all containers and volumes"
-    echo "❓ help       - Show this menu"
-    echo
+# Function to show help
+show_help() {
+    echo "QUIC Load Balancer Management Script"
+    echo ""
+    echo "Usage: $0 [command]"
+    echo ""
+    echo "Commands:"
+    echo "  build       Build Docker images"
+    echo "  start       Start all services"
+    echo "  stop        Stop all services"
+    echo "  restart     Restart all services"
+    echo "  status      Show service status"
+    echo "  logs [svc]  Show logs (optionally for specific service)"
+    echo "  test        Run performance tests"
+    echo "  health      Check service health"
+    echo "  update      Update and restart services"
+    echo "  cleanup     Remove all containers, volumes, and images"
+    echo "  help        Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0 start                 # Start all services"
+    echo "  $0 logs quic-server      # Show logs for QUIC server only"
+    echo "  $0 test                  # Run performance tests"
 }
 
 # Main script logic
@@ -248,34 +253,44 @@ main() {
     check_docker
     check_docker_compose
     
-    # Handle command line arguments
     case "${1:-help}" in
-        "start")
-            start_services
+        build)
+            build
             ;;
-        "stop")
-            stop_services
+        start)
+            start
             ;;
-        "restart")
-            restart_services
+        stop)
+            stop
             ;;
-        "status")
-            show_status
+        restart)
+            restart
             ;;
-        "logs")
-            show_logs "$2"
+        logs)
+            logs "$2"
             ;;
-        "test")
-            run_tests
+        status)
+            status
             ;;
-        "dashboard")
-            open_dashboards
+        test)
+            test_performance
             ;;
-        "cleanup")
+        health)
+            health
+            ;;
+        update)
+            update
+            ;;
+        cleanup)
             cleanup
             ;;
-        "help"|*)
-            show_menu
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            show_help
+            exit 1
             ;;
     esac
 }

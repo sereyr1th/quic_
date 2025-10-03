@@ -71,12 +71,14 @@ services:
     command: python3 -m http.server 8000 --directory static
     restart: unless-stopped
 
-  # Prometheus
+  # Monitoring Stack
   prometheus:
     image: prom/prometheus:latest
-    container_name: quic-prometheus
+    container_name: prometheus
     ports:
       - "9090:9090"
+    networks:
+      - quic-network
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/quic_rules.yml:/etc/prometheus/quic_rules.yml
@@ -88,46 +90,69 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
-    networks:
-      - quic-network
     restart: unless-stopped
-    depends_on:
-      - quic-server
 
-  # Grafana
   grafana:
     image: grafana/grafana:latest
-    container_name: quic-grafana
+    container_name: grafana
     ports:
       - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    networks:
+      - quic-network
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
-    networks:
-      - quic-network
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
     restart: unless-stopped
-    depends_on:
-      - prometheus
 
   # Node Exporter for system metrics
   node-exporter:
     image: prom/node-exporter:latest
-    container_name: quic-node-exporter
+    container_name: node-exporter
     ports:
       - "9100:9100"
+    networks:
+      - quic-network
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
     command:
       - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+
+  # Load Testing Tool (optional)
+  load-tester:
+    image: alpine/curl:latest
+    container_name: load-tester
     networks:
       - quic-network
+    volumes:
+      - ./test_quic_performance.sh:/test_quic_performance.sh
+    entrypoint: ["tail", "-f", "/dev/null"]  # Keep container running
+    restart: "no"
+
+  # Health Check Service
+  health-checker:
+    image: alpine/curl:latest
+    container_name: health-checker
+    networks:
+      - quic-network
+    command: >
+      sh -c "
+        while true; do
+          echo 'Health check at $(date)';
+          curl -k -v https://quic-server:9443/health || echo 'Health check failed';
+          sleep 30;
+        done
+      "
+    depends_on:
+      - quic-server
     restart: unless-stopped
