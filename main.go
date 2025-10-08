@@ -2058,7 +2058,7 @@ func main() {
 			log.Printf("%s%s %s %s (%s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
 		}
 
-		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
+		w.Header().Set("Alt-Svc", `h3=":9444"; ma=86400`)
 		w.Header().Set("X-Server-Protocol", r.Proto)
 		w.Header().Set("X-Enhanced-Features", "basic-health-checks,session-affinity,quic-lb-draft-20")
 
@@ -2185,7 +2185,7 @@ func main() {
 	}
 
 	h3Server := &http3.Server{
-		Addr:       ":9443", // Same port - HTTP/3 uses UDP, HTTP/2 uses TCP
+		Addr:       ":9444", // Different port for HTTP/3 to avoid conflicts
 		Handler:    loggedMux,
 		TLSConfig:  h3TLSConfig,
 		QUICConfig: quicConfig,
@@ -2253,8 +2253,9 @@ func main() {
 	}()
 
 	// Keep the main thread alive and log server status
-	log.Println("🌐 Server is running - HTTP/2 on TCP:9443, HTTP/3 on UDP:9443")
+	log.Println("🌐 Server is running - HTTP/2 on TCP:9443, HTTP/3 on UDP:9444")
 	log.Println("🔗 Access: https://localhost:9443")
+	log.Println("🚀 HTTP/3: https://localhost:9444")
 
 	// Keep server alive
 	select {}
