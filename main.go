@@ -2065,12 +2065,30 @@ func main() {
 		finalHandler.ServeHTTP(w, r)
 	})
 
+	// Load certificate for TLS config (used by both HTTP/2 and HTTP/3)
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	if certFile == "" {
+		certFile = "localhost+2.pem" // fallback
+	}
+	if keyFile == "" {
+		keyFile = "localhost+2-key.pem" // fallback
+	}
+
+	log.Printf("🔐 Loading certificates for both HTTP/2 and HTTP/3: cert=%s, key=%s", certFile, keyFile)
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		log.Fatalf("❌ Failed to load certificates: %v", err)
+	}
+
 	// Enhanced TLS configuration optimized for HTTP/3
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
 		// Support both HTTP/2 and HTTP/3
 		NextProtos: []string{"h3", "h2", "http/1.1"},
+		// Load the certificate into the TLS config
+		Certificates: []tls.Certificate{cert},
 		CipherSuites: []uint16{
 			// TLS 1.3 cipher suites (recommended for HTTP/3)
 			tls.TLS_AES_128_GCM_SHA256,
@@ -2105,7 +2123,7 @@ func main() {
 					log.Printf("📡 Client supports HTTP/1.1")
 				}
 			}
-			return nil, nil
+			return &cert, nil // Return the loaded certificate
 		},
 	}
 
@@ -2131,19 +2149,10 @@ func main() {
 		}
 
 		log.Println("🔄 Starting Enhanced HTTP/1.1 & HTTP/2 server (TCP) on :9443")
+		log.Printf("🔐 HTTP/2 using same certificates as HTTP/3 from TLS config")
 
-		// Use environment variables for certificate paths
-		certFile := os.Getenv("TLS_CERT_FILE")
-		keyFile := os.Getenv("TLS_KEY_FILE")
-		if certFile == "" {
-			certFile = "localhost+2.pem" // fallback
-		}
-		if keyFile == "" {
-			keyFile = "localhost+2-key.pem" // fallback
-		}
-
-		log.Printf("🔐 Using certificates: cert=%s, key=%s", certFile, keyFile)
-		if err := tcpServer.ListenAndServeTLS(certFile, keyFile); err != nil {
+		// Use TLS config that already has certificates loaded
+		if err := tcpServer.ListenAndServeTLS("", ""); err != nil {
 			log.Printf("Enhanced TCP server error: %v", err)
 		}
 	}()
@@ -2151,26 +2160,26 @@ func main() {
 	// Give TCP server time to start
 	time.Sleep(1 * time.Second)
 
-	// Optimized QUIC configuration for production
+	// Simplified QUIC configuration for basic HTTP/3 compatibility
 	quicConfig := &quic.Config{
-		// Connection management
-		MaxIdleTimeout:  60 * time.Second, // Increased for better connection persistence
-		KeepAlivePeriod: 15 * time.Second, // Regular keep-alive to maintain connections
+		// Basic connection management
+		MaxIdleTimeout:  30 * time.Second, // Standard timeout
+		KeepAlivePeriod: 10 * time.Second, // Basic keep-alive
 
-		// Stream limits - optimized for HTTP/3 multiplexing
-		MaxIncomingStreams:    2000, // Increased for better concurrent request handling
-		MaxIncomingUniStreams: 1000, // Sufficient for HTTP/3 control streams
+		// Conservative stream limits
+		MaxIncomingStreams:    100, // Reduced for stability
+		MaxIncomingUniStreams: 10,  // Minimal for HTTP/3 control streams
 
-		// Performance optimizations
-		DisablePathMTUDiscovery: false, // Enable for optimal packet sizes
-		EnableDatagrams:         true,  // Enable for HTTP/3 features
-		Allow0RTT:               true,  // Enable 0-RTT for faster reconnections
+		// Disable experimental features
+		DisablePathMTUDiscovery: true,  // Disable for compatibility
+		EnableDatagrams:         false, // Disable experimental features
+		Allow0RTT:               false, // Disable 0-RTT for stability
 
-		// Buffer sizes optimized for throughput
-		InitialStreamReceiveWindow:     1024 * 1024,      // 1 MB - better for large transfers
-		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16 MB - increased for high throughput
-		InitialConnectionReceiveWindow: 2 * 1024 * 1024,  // 2 MB - better initial capacity
-		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32 MB - high capacity for multiple streams
+		// Conservative buffer sizes
+		InitialStreamReceiveWindow:     256 * 1024,      // 256 KB - conservative
+		MaxStreamReceiveWindow:         1024 * 1024,     // 1 MB - reasonable
+		InitialConnectionReceiveWindow: 512 * 1024,      // 512 KB - conservative
+		MaxConnectionReceiveWindow:     2 * 1024 * 1024, // 2 MB - reasonable
 	}
 
 	h3Server := &http3.Server{
@@ -2220,29 +2229,10 @@ func main() {
 
 	// Start HTTP/3 server in a goroutine so it doesn't block
 	go func() {
-		// Use environment variables for certificate paths
-		certFile := os.Getenv("TLS_CERT_FILE")
-		keyFile := os.Getenv("TLS_KEY_FILE")
-		if certFile == "" {
-			certFile = "localhost+2.pem" // fallback
-		}
-		if keyFile == "" {
-			keyFile = "localhost+2-key.pem" // fallback
-		}
-
-		log.Printf("🔐 HTTP/3 using certificates: cert=%s, key=%s", certFile, keyFile)
-		
-		// Try a more compatible HTTP/3 server setup
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-		if err != nil {
-			log.Printf("❌ Failed to load certificates for HTTP/3: %v", err)
-			return
-		}
-		
-		h3Server.TLSConfig.Certificates = []tls.Certificate{cert}
-		
 		log.Printf("🚀 Starting HTTP/3 server on port 9443...")
-		err = h3Server.ListenAndServe()
+		log.Printf("🔐 HTTP/3 using same TLS config as HTTP/2 server")
+
+		err := h3Server.ListenAndServe()
 		if err != nil {
 			log.Printf("❌ Enhanced HTTP/3 server failed to start: %v", err)
 			log.Printf("💡 HTTP/3 is experimental - HTTP/2 will work normally")
