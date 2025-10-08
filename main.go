@@ -2131,7 +2131,19 @@ func main() {
 		}
 
 		log.Println("🔄 Starting Enhanced HTTP/1.1 & HTTP/2 server (TCP) on :9443")
-		if err := tcpServer.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem"); err != nil {
+
+		// Use environment variables for certificate paths
+		certFile := os.Getenv("TLS_CERT_FILE")
+		keyFile := os.Getenv("TLS_KEY_FILE")
+		if certFile == "" {
+			certFile = "localhost+2.pem" // fallback
+		}
+		if keyFile == "" {
+			keyFile = "localhost+2-key.pem" // fallback
+		}
+
+		log.Printf("🔐 Using certificates: cert=%s, key=%s", certFile, keyFile)
+		if err := tcpServer.ListenAndServeTLS(certFile, keyFile); err != nil {
 			log.Printf("Enhanced TCP server error: %v", err)
 		}
 	}()
@@ -2208,7 +2220,18 @@ func main() {
 
 	// Start HTTP/3 server in a goroutine so it doesn't block
 	go func() {
-		err := h3Server.ListenAndServeTLS("localhost+2.pem", "localhost+2-key.pem")
+		// Use environment variables for certificate paths
+		certFile := os.Getenv("TLS_CERT_FILE")
+		keyFile := os.Getenv("TLS_KEY_FILE")
+		if certFile == "" {
+			certFile = "localhost+2.pem" // fallback
+		}
+		if keyFile == "" {
+			keyFile = "localhost+2-key.pem" // fallback
+		}
+
+		log.Printf("🔐 HTTP/3 using certificates: cert=%s, key=%s", certFile, keyFile)
+		err := h3Server.ListenAndServeTLS(certFile, keyFile)
 		if err != nil {
 			log.Printf("❌ Enhanced HTTP/3 server failed to start: %v", err)
 			log.Printf("💡 This is likely because both TCP and UDP servers are trying to bind to the same port")

@@ -65,3 +65,6 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
+# Documentation files (local use only)
+4VM-STARTUP-GUIDE.md
+TEACHER_MKCERT_METHOD.md
