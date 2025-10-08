@@ -2069,8 +2069,8 @@ func main() {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
-		// Optimized protocol order: prioritize HTTP/3, fallback to HTTP/2, then HTTP/1.1
-		NextProtos: []string{"h3", "h2", "http/1.1"},
+		// Optimized protocol order: prioritize HTTP/2 for main server, HTTP/3 via separate server
+		NextProtos: []string{"h2", "http/1.1"},
 		CipherSuites: []uint16{
 			// TLS 1.3 cipher suites (recommended for HTTP/3)
 			tls.TLS_AES_128_GCM_SHA256,
@@ -2173,10 +2173,21 @@ func main() {
 		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32 MB - high capacity for multiple streams
 	}
 
+	// HTTP/3 specific TLS config
+	h3TLSConfig := &tls.Config{
+		MinVersion: tls.VersionTLS13, // HTTP/3 requires TLS 1.3
+		NextProtos: []string{"h3"},   // Only HTTP/3
+		CipherSuites: []uint16{
+			tls.TLS_AES_128_GCM_SHA256,
+			tls.TLS_AES_256_GCM_SHA384,
+			tls.TLS_CHACHA20_POLY1305_SHA256,
+		},
+	}
+
 	h3Server := &http3.Server{
 		Addr:       ":9443", // Same port - HTTP/3 uses UDP, HTTP/2 uses TCP
 		Handler:    loggedMux,
-		TLSConfig:  tlsConfig,
+		TLSConfig:  h3TLSConfig,
 		QUICConfig: quicConfig,
 	}
 
