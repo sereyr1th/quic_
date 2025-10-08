@@ -2058,7 +2058,7 @@ func main() {
 			log.Printf("%s%s %s %s (%s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
 		}
 
-		w.Header().Set("Alt-Svc", `h3=":9444"; ma=86400`)
+		w.Header().Set("Alt-Svc", `h3=":9443"; ma=86400`)
 		w.Header().Set("X-Server-Protocol", r.Proto)
 		w.Header().Set("X-Enhanced-Features", "basic-health-checks,session-affinity,quic-lb-draft-20")
 
@@ -2069,8 +2069,8 @@ func main() {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
-		// Optimized protocol order: prioritize HTTP/2 for main server, HTTP/3 via separate server
-		NextProtos: []string{"h2", "http/1.1"},
+		// Support both HTTP/2 and HTTP/3
+		NextProtos: []string{"h3", "h2", "http/1.1"},
 		CipherSuites: []uint16{
 			// TLS 1.3 cipher suites (recommended for HTTP/3)
 			tls.TLS_AES_128_GCM_SHA256,
@@ -2173,21 +2173,10 @@ func main() {
 		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32 MB - high capacity for multiple streams
 	}
 
-	// HTTP/3 specific TLS config
-	h3TLSConfig := &tls.Config{
-		MinVersion: tls.VersionTLS13, // HTTP/3 requires TLS 1.3
-		NextProtos: []string{"h3"},   // Only HTTP/3
-		CipherSuites: []uint16{
-			tls.TLS_AES_128_GCM_SHA256,
-			tls.TLS_AES_256_GCM_SHA384,
-			tls.TLS_CHACHA20_POLY1305_SHA256,
-		},
-	}
-
 	h3Server := &http3.Server{
-		Addr:       ":9444", // Different port for HTTP/3 to avoid conflicts
+		Addr:       ":9443", // Same port as HTTP/2 - QUIC uses UDP, HTTP/2 uses TCP
 		Handler:    loggedMux,
-		TLSConfig:  h3TLSConfig,
+		TLSConfig:  tlsConfig, // Use same TLS config
 		QUICConfig: quicConfig,
 	}
 
@@ -2242,20 +2231,29 @@ func main() {
 		}
 
 		log.Printf("🔐 HTTP/3 using certificates: cert=%s, key=%s", certFile, keyFile)
-		err := h3Server.ListenAndServeTLS(certFile, keyFile)
+		
+		// Try a more compatible HTTP/3 server setup
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			log.Printf("❌ Failed to load certificates for HTTP/3: %v", err)
+			return
+		}
+		
+		h3Server.TLSConfig.Certificates = []tls.Certificate{cert}
+		
+		log.Printf("🚀 Starting HTTP/3 server on port 9443...")
+		err = h3Server.ListenAndServe()
 		if err != nil {
 			log.Printf("❌ Enhanced HTTP/3 server failed to start: %v", err)
-			log.Printf("💡 This is likely because both TCP and UDP servers are trying to bind to the same port")
-			log.Printf("💡 HTTP/2 will work normally, but HTTP/3/QUIC is not available")
+			log.Printf("💡 HTTP/3 is experimental - HTTP/2 will work normally")
 		} else {
 			log.Println("✅ Enhanced HTTP/3 server started successfully on port 9443")
 		}
 	}()
 
 	// Keep the main thread alive and log server status
-	log.Println("🌐 Server is running - HTTP/2 on TCP:9443, HTTP/3 on UDP:9444")
+	log.Println("🌐 Server is running - HTTP/2 on TCP:9443, HTTP/3 on UDP:9443")
 	log.Println("🔗 Access: https://localhost:9443")
-	log.Println("🚀 HTTP/3: https://localhost:9444")
 
 	// Keep server alive
 	select {}
